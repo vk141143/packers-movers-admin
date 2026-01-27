@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "crew-admin-backend"
+version = "1.0.0"
+description = "UK-based Crew & Admin Management Backend"
+authors = ["Your Name <email@example.com>"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.13"
+fastapi = "^0.115.0"
+uvicorn = {extras = ["standard"], version = "^0.34.0"}
+sqlalchemy = "^2.0.36"
+pydantic = {extras = ["email"], version = "^2.10.0"}
+python-jose = {extras = ["cryptography"], version = "^3.3.0"}
+passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+python-multipart = "^0.0.20"
+python-dotenv = "^1.0.1"
+psycopg2 = "^2.9.10"
+bcrypt = "4.2.1"
+boto3 = "^1.37.0"
+reportlab = "^4.2.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

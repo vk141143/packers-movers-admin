@@ -1,0 +1,15 @@
+{
+  "name": "Crew & Admin Management API",
+  "description": "FastAPI backend for UK-based Crew & Admin Management",
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ],
+  "env": {
+    "PYTHON_RUNTIME_VERSION": {
+      "description": "Python version",
+      "value": "3.11.10"
+    }
+  }
+}
