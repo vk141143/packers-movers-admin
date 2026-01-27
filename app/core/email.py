@@ -41,7 +41,7 @@ def send_admin_notification(crew_email: str, crew_name: str):
     msg.attach(MIMEText(body, 'plain'))
     
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
         server.starttls()
         server.login(smtp_user, smtp_password)
         server.send_message(msg)
@@ -79,7 +79,7 @@ def send_approval_email(crew_email: str, crew_name: str):
     msg.attach(MIMEText(body, 'plain'))
     
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
         server.starttls()
         server.login(smtp_user, smtp_password)
         server.send_message(msg)
@@ -120,7 +120,7 @@ def send_otp_email(email: str, otp: str):
     
     try:
         print(f"Attempting to send OTP email to {email}")
-        server = smtplib.SMTP(smtp_server, smtp_port)
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
         server.starttls()
         server.login(smtp_user, smtp_password)
         server.send_message(msg)
@@ -164,7 +164,7 @@ def send_job_otp_email(client_email: str, client_name: str, otp: str, job_id: st
     msg.attach(MIMEText(body, 'plain'))
     
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
         server.starttls()
         server.login(smtp_user, smtp_password)
         server.send_message(msg)
@@ -205,7 +205,7 @@ def send_job_assignment_email(crew_email: str, crew_name: str, job_id: str, prop
     msg.attach(MIMEText(body, 'plain'))
     
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
         server.starttls()
         server.login(smtp_user, smtp_password)
         server.send_message(msg)
@@ -248,7 +248,7 @@ def send_payment_request_email(client_email: str, job_id: str, final_price: floa
     msg.attach(MIMEText(body, 'plain'))
     
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
         server.starttls()
         server.login(smtp_user, smtp_password)
         server.send_message(msg)
