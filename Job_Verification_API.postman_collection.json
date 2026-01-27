@@ -1,0 +1,205 @@
+{
+  "info": {
+    "name": "Job Verification API",
+    "description": "Admin job verification endpoints for crew-submitted jobs",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8001/api",
+      "type": "string"
+    },
+    {
+      "key": "admin_token",
+      "value": "YOUR_ADMIN_TOKEN_HERE",
+      "type": "string"
+    },
+    {
+      "key": "job_id",
+      "value": "754714ee-e821-48f0-a11c-0ebb61d98cec",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Admin Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"securepassword\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login/admin",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login", "admin"]
+            },
+            "description": "Login as admin and get access token"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Job Verification",
+      "item": [
+        {
+          "name": "Get Verification Stats",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/verification/stats",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "verification", "stats"]
+            },
+            "description": "Get verification statistics (pending count, total value, avg value)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Pending Verifications",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/verification/jobs",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "verification", "jobs"]
+            },
+            "description": "Get list of all jobs pending verification"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Job Verification Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/verification/jobs/{{job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "verification", "jobs", "{{job_id}}"]
+            },
+            "description": "Get detailed information for a specific job including photos"
+          },
+          "response": []
+        },
+        {
+          "name": "Approve Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"final_price\": 2500.00,\n  \"rating\": 4.5\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/verification/jobs/{{job_id}}/approve",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "verification", "jobs", "{{job_id}}", "approve"]
+            },
+            "description": "Approve job verification and mark as completed"
+          },
+          "response": []
+        },
+        {
+          "name": "Reject Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/verification/jobs/{{job_id}}/reject",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "verification", "jobs", "{{job_id}}", "reject"]
+            },
+            "description": "Reject job verification and send back to crew"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Other Admin Endpoints",
+      "item": [
+        {
+          "name": "Get Active Jobs Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/dashboard/active-jobs",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "dashboard", "active-jobs"]
+            },
+            "description": "Get all active jobs"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Pending Crew Approvals",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/crew/pending",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "crew", "pending"]
+            },
+            "description": "Get list of crew members awaiting approval"
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
