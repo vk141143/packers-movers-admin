@@ -105,13 +105,17 @@ async def get_crew_job_by_id(
         raise HTTPException(status_code=403, detail="This job is not assigned to you")
     
     # Get client details
-    client = db.query(Client).filter(Client.id == job.client_id).first()
+    client_name = "Unknown"
+    if job.client_id:
+        client = db.query(Client).filter(Client.id == job.client_id).first()
+        if client:
+            client_name = client.company_name if client.company_name else client.full_name
     
     return {
         "job_id": job.id,
         "scheduled_date": job.preferred_date if job.preferred_date else "",
         "scheduled_time": job.preferred_time if job.preferred_time else "",
-        "client_name": client.company_name if client else "Unknown",
+        "client_name": client_name,
         "service_type": getattr(job, 'service_type', 'emergency clearance'),
         "property_address": job.property_address
     }
