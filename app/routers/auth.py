@@ -193,7 +193,6 @@ def get_crew_profile(current_user: dict = Depends(get_current_user), db: Session
         "phone_number": crew.phone_number,
         "address": getattr(crew, 'address', None),
         "is_approved": crew.is_approved,
-        "status": crew.status,
         "rating": round(float(avg_rating), 2) if avg_rating else 0.0,
         "organization_name": admin.organization_name if admin and admin.organization_name else None,
         "department": admin.department if admin and admin.department else None,
