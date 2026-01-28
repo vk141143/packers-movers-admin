@@ -85,6 +85,44 @@ async def get_crew_jobs(
     
     return result
 
+@router.get("/crew/jobs/{job_id}", tags=["Crew"], summary="Get Job Details by ID")
+async def get_crew_job_by_id(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from app.models.client import Client
+    
+    crew = db.query(Crew).filter(Crew.email == current_user.get("sub")).first()
+    if not crew:
+        raise HTTPException(status_code=403, detail="Crew access required")
+    
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.assigned_crew_id != crew.id:
+        raise HTTPException(status_code=403, detail="This job is not assigned to you")
+    
+    # Get client details
+    client = db.query(Client).filter(Client.id == job.client_id).first()
+    
+    return {
+        "job_id": job.id,
+        "job_reference": f"PROP-{job.created_at.year}-{str(job.id)[:8].upper()}-EMERG" if job.created_at else f"PROP-{str(job.id)[:8].upper()}",
+        "client_name": client.company_name if client else "Unknown",
+        "service_type": getattr(job, 'service_type', 'emergency clearance'),
+        "scheduled_date": job.preferred_date if job.preferred_date else "",
+        "scheduled_time": job.preferred_time if job.preferred_time else "",
+        "property_address": job.property_address,
+        "property_type": getattr(job, 'property_type', 'flat'),
+        "property_size": getattr(job, 'property_size', 'M'),
+        "priority": getattr(job, 'urgency_level', 'standard'),
+        "status": job.status,
+        "latitude": job.latitude,
+        "longitude": job.longitude
+    }
+
 @router.patch("/crew/jobs/{job_id}/arrive", tags=["Crew"])
 async def crew_arrive(
     job_id: str,
