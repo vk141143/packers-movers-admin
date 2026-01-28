@@ -11,6 +11,7 @@ class Crew(Base):
     full_name = Column(String, nullable=False)
     password_hash = Column(String, nullable=False)
     phone_number = Column(String)
+    address = Column(String, nullable=True)
     drivers_license = Column(String)
     dbs_certificate = Column(String)
     proof_of_address = Column(String)
