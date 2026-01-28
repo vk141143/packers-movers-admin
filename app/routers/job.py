@@ -109,18 +109,11 @@ async def get_crew_job_by_id(
     
     return {
         "job_id": job.id,
-        "job_reference": f"PROP-{job.created_at.year}-{str(job.id)[:8].upper()}-EMERG" if job.created_at else f"PROP-{str(job.id)[:8].upper()}",
-        "client_name": client.company_name if client else "Unknown",
-        "service_type": getattr(job, 'service_type', 'emergency clearance'),
         "scheduled_date": job.preferred_date if job.preferred_date else "",
         "scheduled_time": job.preferred_time if job.preferred_time else "",
-        "property_address": job.property_address,
-        "property_type": getattr(job, 'property_type', 'flat'),
-        "property_size": getattr(job, 'property_size', 'M'),
-        "priority": getattr(job, 'urgency_level', 'standard'),
-        "status": job.status,
-        "latitude": job.latitude,
-        "longitude": job.longitude
+        "client_name": client.company_name if client else "Unknown",
+        "service_type": getattr(job, 'service_type', 'emergency clearance'),
+        "property_address": job.property_address
     }
 
 @router.patch("/crew/jobs/{job_id}/arrive", tags=["Crew"])
