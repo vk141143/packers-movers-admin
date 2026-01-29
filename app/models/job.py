@@ -15,6 +15,7 @@ class Job(Base):
     property_photos = Column(Text, nullable=True)
     quote_amount = Column(Float, nullable=True)
     deposit_amount = Column(Float, nullable=True)
+    remaining_amount = Column(Float, nullable=True)
     quote_notes = Column(Text, nullable=True)
     decline_reason = Column(Text, nullable=True)
     additional_information = Column(Text, nullable=True)
