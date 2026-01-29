@@ -109,14 +109,27 @@ async def get_crew_job_by_id(
     if job.client_id:
         client = db.query(Client).filter(Client.id == job.client_id).first()
         if client:
-            client_name = client.company_name if client.company_name else client.full_name
+            client_name = client.full_name
+    
+    # Get service type name
+    service_type_name = "Emergency Clearance"
+    if job.service_type:
+        try:
+            service_result = db.execute(
+                text("SELECT name FROM service_types WHERE id = :id"),
+                {"id": job.service_type}
+            ).fetchone()
+            if service_result:
+                service_type_name = service_result[0]
+        except:
+            pass
     
     return {
         "job_id": job.id,
         "scheduled_date": job.preferred_date if job.preferred_date else "",
         "scheduled_time": job.preferred_time if job.preferred_time else "",
         "client_name": client_name,
-        "service_type": getattr(job, 'service_type', 'emergency clearance'),
+        "service_type": service_type_name,
         "property_address": job.property_address
     }
 
