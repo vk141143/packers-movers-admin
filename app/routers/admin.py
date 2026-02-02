@@ -4,7 +4,6 @@ from app.database.db import get_db
 from app.models.crew import Admin, Crew
 from app.models.job import Job
 from app.models.photo import JobPhoto
-from app.models.checklist import JobChecklist
 from app.core.security import get_current_user
 from sqlalchemy import text
 from pydantic import BaseModel
@@ -97,10 +96,6 @@ class JobPhotoResponse(BaseModel):
     type: str
     timestamp: str
 
-class ChecklistItemResponse(BaseModel):
-    name: str
-    completed: bool
-
 class JobVerificationDetailResponse(BaseModel):
     job_id: str
     client_name: str
@@ -113,8 +108,6 @@ class JobVerificationDetailResponse(BaseModel):
     sla_status: str
     before_photos: List[JobPhotoResponse]
     after_photos: List[JobPhotoResponse]
-    checklist_items: List[ChecklistItemResponse]
-    checklist_completed: bool
     total_photos: int
 
 class JobVerificationListResponse(BaseModel):
@@ -884,21 +877,6 @@ async def get_job_verification_details(
         JobPhoto.type == "after"
     ).all()
     
-    checklist = db.query(JobChecklist).filter(JobChecklist.job_id == job_id).first()
-    checklist_completed = False
-    checklist_items = []
-    
-    if checklist:
-        checklist_items = [
-            {"name": "Initial property inspection", "completed": checklist.access_gained_successfully},
-            {"name": "Pack fragile items", "completed": checklist.waste_verified_with_client},
-            {"name": "Load items into vehicle", "completed": checklist.no_hazardous_material_found},
-            {"name": "Transport to destination", "completed": checklist.property_protected},
-            {"name": "Unload and arrange items", "completed": checklist.loading_started_safely}
-        ]
-        if checklist.completed_at:
-            checklist_completed = True
-    
     # Calculate work duration and SLA status
     work_duration = "N/A"
     sla_status = "SLA Met"
@@ -939,8 +917,6 @@ async def get_job_verification_details(
             }
             for photo in after_photos
         ],
-        "checklist_items": checklist_items,
-        "checklist_completed": checklist_completed,
         "total_photos": len(before_photos) + len(after_photos)
     }
 

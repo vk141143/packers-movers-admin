@@ -3,10 +3,8 @@ from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.job import Job
 from app.models.crew import Admin, Crew
-from app.models.checklist import JobChecklist
 from app.schemas.job import JobResponse, ClientJobResponse
 from app.schemas.crew import AssignCrewRequest
-from app.schemas.checklist import ChecklistUpdate, ChecklistResponse
 from app.core.security import get_current_user
 from app.core.storage import storage
 from typing import List
@@ -195,92 +193,7 @@ async def upload_before_photo(
     job.status = "before_photo"
     db.commit()
     
-    # Auto-create checklist for this job
-    from app.models.checklist import JobChecklist
-    existing_checklist = db.query(JobChecklist).filter(JobChecklist.job_id == job_id).first()
-    if not existing_checklist:
-        checklist = JobChecklist(job_id=job_id)
-        db.add(checklist)
-        db.commit()
-    
     return {"message": "Before photos uploaded", "status": job.status, "uploaded_count": len(uploaded_files)}
-
-@router.get("/crew/jobs/{job_id}/checklist", tags=["Crew"])
-async def get_job_checklist(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    crew = db.query(Crew).filter(Crew.email == current_user.get("sub")).first()
-    if not crew:
-        raise HTTPException(status_code=403, detail="Crew access required")
-    
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.assigned_crew_id != crew.id:
-        raise HTTPException(status_code=403, detail="This job is not assigned to you")
-    
-    from app.models.checklist import JobChecklist
-    checklist = db.query(JobChecklist).filter(JobChecklist.job_id == job_id).first()
-    
-    if not checklist:
-        raise HTTPException(status_code=404, detail="Checklist not found")
-    
-    return {
-        "job_id": job_id,
-        "access_gained_successfully": checklist.access_gained_successfully,
-        "waste_verified_with_client": checklist.waste_verified_with_client,
-        "no_hazardous_material_found": checklist.no_hazardous_material_found,
-        "property_protected": checklist.property_protected,
-        "loading_started_safely": checklist.loading_started_safely,
-        "completed_at": checklist.completed_at
-    }
-
-@router.patch("/crew/jobs/{job_id}/checklist", tags=["Crew"])
-async def update_job_checklist(
-    job_id: str,
-    access_gained_successfully: bool = Form(False),
-    waste_verified_with_client: bool = Form(False),
-    no_hazardous_material_found: bool = Form(False),
-    property_protected: bool = Form(False),
-    loading_started_safely: bool = Form(False),
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    crew = db.query(Crew).filter(Crew.email == current_user.get("sub")).first()
-    if not crew:
-        raise HTTPException(status_code=403, detail="Crew access required")
-    
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.assigned_crew_id != crew.id:
-        raise HTTPException(status_code=403, detail="This job is not assigned to you")
-    
-    from app.models.checklist import JobChecklist
-    from datetime import datetime
-    
-    checklist = db.query(JobChecklist).filter(JobChecklist.job_id == job_id).first()
-    if not checklist:
-        raise HTTPException(status_code=404, detail="Checklist not found")
-    
-    checklist.access_gained_successfully = access_gained_successfully
-    checklist.waste_verified_with_client = waste_verified_with_client
-    checklist.no_hazardous_material_found = no_hazardous_material_found
-    checklist.property_protected = property_protected
-    checklist.loading_started_safely = loading_started_safely
-    
-    # Mark as completed if all items checked
-    if all([access_gained_successfully, waste_verified_with_client, no_hazardous_material_found, 
-            property_protected, loading_started_safely]):
-        checklist.completed_at = datetime.utcnow()
-    
-    db.commit()
-    
-    return {"message": "Checklist updated successfully", "completed_at": checklist.completed_at}
 
 @router.post("/crew/jobs/{job_id}/upload-after-photo", tags=["Crew"])
 async def upload_after_photo(
@@ -302,12 +215,6 @@ async def upload_after_photo(
     
     if job.status != "before_photo":
         raise HTTPException(status_code=400, detail=f"Job must be in before_photo status. Current status: {job.status}")
-    
-    # Check if checklist is completed
-    from app.models.checklist import JobChecklist
-    checklist = db.query(JobChecklist).filter(JobChecklist.job_id == job_id).first()
-    if not checklist or not checklist.completed_at:
-        raise HTTPException(status_code=400, detail="Checklist must be completed before uploading after photos")
     
     from app.models.photo import JobPhoto
     uploaded_files = []

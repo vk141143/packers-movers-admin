@@ -9,7 +9,6 @@ from app.models.job import Job
 from app.models.photo import JobPhoto
 from app.models.invoice import Invoice
 from app.models.client import Client
-from app.models.checklist import JobChecklist
 from sqlalchemy import text
 from dotenv import load_dotenv
 
