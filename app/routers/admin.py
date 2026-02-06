@@ -173,10 +173,14 @@ async def get_active_jobs_dashboard(
             status_display = "Quote Sent"
             action = "No action needed"
         elif job.status == "quote_accepted":
+            # Waiting for deposit payment
+            status_display = "Awaiting Deposit"
+            action = "Wait for Payment"
+        elif job.status == "deposit_paid":
             # Ready to assign crew
-            status_display = "Quote Accepted"
+            status_display = "Deposit Paid"
             action = "Assign Crew"
-        elif job.status == "crew_assigned":
+        elif job.status == "deposit_paid":
             # Crew assigned
             status_display = "Crew Assigned"
             action = "No action needed"
@@ -582,8 +586,9 @@ async def assign_crew_to_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    if job.status not in ["quote_accepted", "deposit_paid"]:
-        raise HTTPException(status_code=400, detail="Job must be in quote_accepted or deposit_paid status to assign crew")
+
+    if job.status != "deposit_paid":
+        raise HTTPException(status_code=400, detail="Deposit must be paid before assigning crew")
     
     crew = db.query(Crew).filter(Crew.id == crew_id, Crew.is_approved == True).first()
     if not crew:
@@ -618,8 +623,8 @@ async def get_unassigned_job_by_id(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    if job.status not in ["quote_accepted", "deposit_paid"] or job.assigned_crew_id is not None:
-        raise HTTPException(status_code=400, detail="Job is not unassigned")
+    if job.status != "deposit_paid" or job.assigned_crew_id is not None:
+        raise HTTPException(status_code=400, detail="Job must have deposit paid and no crew assigned")
     
     client_name = "Client"
     try:
@@ -696,7 +701,7 @@ async def get_unassigned_jobs(
         raise HTTPException(status_code=403, detail="Admin access required")
     
     jobs = db.query(Job).filter(
-        Job.status.in_(["quote_accepted", "deposit_paid"]),
+        Job.status == "deposit_paid",
         Job.assigned_crew_id.is_(None)
     ).order_by(Job.created_at.desc()).all()
     
