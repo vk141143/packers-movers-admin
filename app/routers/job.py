@@ -272,7 +272,7 @@ async def complete_work(
     
     return {
         "message": "Work completed successfully",
-        "job_reference": f"PROP-{job.created_at.year}-{str(job.id)[:3].upper()}-EMERG" if job.created_at else f"PROP-{str(job.id)[:8].upper()}",
+        "job_id": job.id,
         "before_photos": before_photos_count,
         "after_photos": after_photos_count,
         "next_step": "Awaiting admin review",
