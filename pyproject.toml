@@ -19,6 +19,7 @@ psycopg2 = "^2.9.10"
 bcrypt = "4.2.1"
 boto3 = "^1.37.0"
 reportlab = "^4.2.0"
+twilio = "^9.0.0"
 
 [build-system]
 requires = ["poetry-core"]
