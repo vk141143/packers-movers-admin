@@ -101,7 +101,7 @@ class VerifyForgotOTPRequest(BaseModel):
     contact_method: str = Field(..., description="Either 'email' or 'phone'")
     email: Optional[EmailStr] = None
     phone_number: Optional[str] = None
-    otp: str = Field(..., min_length=4, max_length=4)
+    otp: str = Field(..., min_length=6, max_length=6)
     
     @validator('contact_method')
     def validate_contact_method(cls, v):

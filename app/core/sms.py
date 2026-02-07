@@ -3,30 +3,74 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-def send_sms_otp(phone_number: str, otp: str) -> bool:
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_VERIFY_SERVICE_SID = os.getenv("TWILIO_VERIFY_SERVICE_SID")
+
+try:
+    from twilio.rest import Client
+    TWILIO_AVAILABLE = True
+except ImportError:
+    TWILIO_AVAILABLE = False
+    print("Twilio not installed. SMS OTP will be disabled. Install with: pip install twilio")
+
+def send_sms_otp(phone_number: str, otp: str = None) -> bool:
     """
-    Send OTP via SMS to phone number
-    For production, integrate with Twilio, AWS SNS, or other SMS provider
+    Send OTP via SMS using Twilio Verify API
+    If otp is None, Twilio generates it automatically
     """
+    if not TWILIO_AVAILABLE:
+        print(f"📱 SMS OTP to {phone_number}: {otp} (Twilio not installed)")
+        return False
+    
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_VERIFY_SERVICE_SID:
+        print(f"📱 SMS OTP to {phone_number}: {otp} (Twilio not configured)")
+        return False
+    
     try:
-        # For now, just print to console (replace with actual SMS service)
-        print(f"📱 SMS OTP to {phone_number}: {otp}")
-        print(f"Message: Your password reset OTP is: {otp}. Valid for 5 minutes.")
+        # Format phone number to E.164 format if not already
+        if not phone_number.startswith("+"):
+            phone_number = f"+{phone_number}"
         
-        # TODO: Integrate with actual SMS provider
-        # Example with Twilio:
-        # from twilio.rest import Client
-        # account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-        # auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-        # client = Client(account_sid, auth_token)
-        # message = client.messages.create(
-        #     body=f"Your password reset OTP is: {otp}. Valid for 5 minutes.",
-        #     from_=os.getenv("TWILIO_PHONE_NUMBER"),
-        #     to=phone_number
-        # )
-        # return message.sid is not None
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         
+        # Use Twilio Verify API - let Twilio generate OTP
+        verification = client.verify.v2.services(TWILIO_VERIFY_SERVICE_SID).verifications.create(
+            to=phone_number,
+            channel='sms'
+        )
+        
+        print(f"✅ SMS OTP sent successfully to {phone_number}. Status: {verification.status}")
         return True
     except Exception as e:
-        print(f"Error sending SMS: {e}")
+        print(f"❌ Error sending SMS OTP: {e}")
+        return False
+
+def verify_sms_otp(phone_number: str, otp: str) -> bool:
+    """
+    Verify OTP via Twilio Verify API
+    """
+    if not TWILIO_AVAILABLE:
+        return False
+    
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_VERIFY_SERVICE_SID:
+        return False
+    
+    try:
+        # Format phone number to E.164 format if not already
+        if not phone_number.startswith("+"):
+            phone_number = f"+{phone_number}"
+        
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        
+        # Verify the OTP
+        verification_check = client.verify.v2.services(TWILIO_VERIFY_SERVICE_SID).verification_checks.create(
+            to=phone_number,
+            code=otp
+        )
+        
+        print(f"OTP verification status: {verification_check.status}")
+        return verification_check.status == "approved"
+    except Exception as e:
+        print(f"Failed to verify OTP: {e}")
         return False
