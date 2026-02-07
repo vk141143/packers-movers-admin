@@ -244,16 +244,18 @@ def forgot_password_crew(data: ForgotPasswordRequest, db: Session = Depends(get_
         user = db.query(Crew).filter(Crew.phone_number == data.phone_number).first()
     
     if user and user.is_approved:
-        otp = str(random.randint(1000, 9999))
-        user.reset_otp = otp
-        user.reset_otp_expiry = datetime.utcnow() + timedelta(minutes=5)
-        db.commit()
-        
-        # Send OTP via chosen method
         if data.contact_method == "email":
+            # Email OTP - store in DB
+            otp = str(random.randint(100000, 999999))  # 6-digit OTP
+            user.reset_otp = otp
+            user.reset_otp_expiry = datetime.utcnow() + timedelta(minutes=5)
+            db.commit()
             send_otp_email(data.email, otp)
-        else:  # phone
-            send_sms_otp(data.phone_number, otp)
+        else:  # phone - use Twilio (no DB storage)
+            user.reset_otp = None
+            user.reset_otp_expiry = None
+            db.commit()
+            send_sms_otp(data.phone_number)
     
     return {
         "message": f"If {'email' if data.contact_method == 'email' else 'phone number'} exists, OTP has been sent",
@@ -264,6 +266,7 @@ def forgot_password_crew(data: ForgotPasswordRequest, db: Session = Depends(get_
 def verify_forgot_otp_crew(data: VerifyForgotOTPRequest, db: Session = Depends(get_db)):
     import secrets
     from datetime import datetime, timedelta
+    from app.core.sms import verify_sms_otp
     
     # Find user by email or phone
     if data.contact_method == "email":
@@ -274,11 +277,18 @@ def verify_forgot_otp_crew(data: VerifyForgotOTPRequest, db: Session = Depends(g
     if not user:
         raise HTTPException(status_code=400, detail="Invalid OTP")
     
-    if not user.reset_otp or user.reset_otp != data.otp:
-        raise HTTPException(status_code=400, detail="Invalid OTP")
-    
-    if user.reset_otp_expiry < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="OTP expired")
+    # Verify based on contact method
+    if data.contact_method == "phone":
+        # Verify with Twilio
+        if not verify_sms_otp(data.phone_number, data.otp):
+            raise HTTPException(status_code=400, detail="Invalid OTP")
+    else:
+        # Verify from database for email
+        if not user.reset_otp or user.reset_otp != data.otp:
+            raise HTTPException(status_code=400, detail="Invalid OTP")
+        
+        if user.reset_otp_expiry < datetime.utcnow():
+            raise HTTPException(status_code=400, detail="OTP expired")
     
     reset_token = secrets.token_urlsafe(32)
     user.reset_token = reset_token
@@ -333,16 +343,18 @@ def forgot_password_admin(data: ForgotPasswordRequest, db: Session = Depends(get
         user = db.query(Admin).filter(Admin.phone_number == data.phone_number).first()
     
     if user:
-        otp = str(random.randint(1000, 9999))
-        user.reset_otp = otp
-        user.reset_otp_expiry = datetime.utcnow() + timedelta(minutes=5)
-        db.commit()
-        
-        # Send OTP via chosen method
         if data.contact_method == "email":
+            # Email OTP - store in DB
+            otp = str(random.randint(100000, 999999))  # 6-digit OTP
+            user.reset_otp = otp
+            user.reset_otp_expiry = datetime.utcnow() + timedelta(minutes=5)
+            db.commit()
             send_otp_email(data.email, otp)
-        else:  # phone
-            send_sms_otp(data.phone_number, otp)
+        else:  # phone - use Twilio (no DB storage)
+            user.reset_otp = None
+            user.reset_otp_expiry = None
+            db.commit()
+            send_sms_otp(data.phone_number)
     
     return {
         "message": f"If {'email' if data.contact_method == 'email' else 'phone number'} exists, OTP has been sent",
@@ -353,6 +365,7 @@ def forgot_password_admin(data: ForgotPasswordRequest, db: Session = Depends(get
 def verify_forgot_otp_admin(data: VerifyForgotOTPRequest, db: Session = Depends(get_db)):
     import secrets
     from datetime import datetime, timedelta
+    from app.core.sms import verify_sms_otp
     
     # Find user by email or phone
     if data.contact_method == "email":
@@ -363,11 +376,18 @@ def verify_forgot_otp_admin(data: VerifyForgotOTPRequest, db: Session = Depends(
     if not user:
         raise HTTPException(status_code=400, detail="Invalid OTP")
     
-    if not user.reset_otp or user.reset_otp != data.otp:
-        raise HTTPException(status_code=400, detail="Invalid OTP")
-    
-    if user.reset_otp_expiry < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="OTP expired")
+    # Verify based on contact method
+    if data.contact_method == "phone":
+        # Verify with Twilio
+        if not verify_sms_otp(data.phone_number, data.otp):
+            raise HTTPException(status_code=400, detail="Invalid OTP")
+    else:
+        # Verify from database for email
+        if not user.reset_otp or user.reset_otp != data.otp:
+            raise HTTPException(status_code=400, detail="Invalid OTP")
+        
+        if user.reset_otp_expiry < datetime.utcnow():
+            raise HTTPException(status_code=400, detail="OTP expired")
     
     reset_token = secrets.token_urlsafe(32)
     user.reset_token = reset_token
@@ -481,15 +501,18 @@ def resend_otp_crew(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
         user = db.query(Crew).filter(Crew.phone_number == data.phone_number).first()
     
     if user and user.is_approved:
-        otp = str(random.randint(1000, 9999))
-        user.reset_otp = otp
-        user.reset_otp_expiry = datetime.utcnow() + timedelta(minutes=5)
-        db.commit()
-        
         if data.contact_method == "email":
+            # Email OTP - store in DB
+            otp = str(random.randint(100000, 999999))  # 6-digit OTP
+            user.reset_otp = otp
+            user.reset_otp_expiry = datetime.utcnow() + timedelta(minutes=5)
+            db.commit()
             send_otp_email(data.email, otp)
-        else:
-            send_sms_otp(data.phone_number, otp)
+        else:  # phone - use Twilio (no DB storage)
+            user.reset_otp = None
+            user.reset_otp_expiry = None
+            db.commit()
+            send_sms_otp(data.phone_number)
     
     return {
         "message": f"OTP resent successfully via {data.contact_method}",
@@ -508,15 +531,18 @@ def resend_otp_admin(data: ForgotPasswordRequest, db: Session = Depends(get_db))
         user = db.query(Admin).filter(Admin.phone_number == data.phone_number).first()
     
     if user:
-        otp = str(random.randint(1000, 9999))
-        user.reset_otp = otp
-        user.reset_otp_expiry = datetime.utcnow() + timedelta(minutes=5)
-        db.commit()
-        
         if data.contact_method == "email":
+            # Email OTP - store in DB
+            otp = str(random.randint(100000, 999999))  # 6-digit OTP
+            user.reset_otp = otp
+            user.reset_otp_expiry = datetime.utcnow() + timedelta(minutes=5)
+            db.commit()
             send_otp_email(data.email, otp)
-        else:
-            send_sms_otp(data.phone_number, otp)
+        else:  # phone - use Twilio (no DB storage)
+            user.reset_otp = None
+            user.reset_otp_expiry = None
+            db.commit()
+            send_sms_otp(data.phone_number)
     
     return {
         "message": f"OTP resent successfully via {data.contact_method}",
