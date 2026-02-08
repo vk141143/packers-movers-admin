@@ -1067,7 +1067,7 @@ async def get_completed_payments(
                 "deposit_paid": float(r[4]) if r[4] else 0.0,
                 "remaining_paid": float(r[5]) if r[5] else 0.0,
                 "completed_at": r[6].strftime("%m/%d/%Y") if r[6] else "",
-                "status": "Fully Paid"
+                "status": "Remaining Amount Paid"
             })
         
         return payments
@@ -1085,14 +1085,14 @@ async def get_pending_payments(
         raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
-        # Get jobs with quote_accepted (deposit pending) OR payment_pending (remaining pending)
+        # Get jobs with all payment-related statuses
         query = text("""
             SELECT 
                 j.id, j.property_address, j.service_type, j.quote_amount,
                 j.deposit_amount, j.remaining_amount, j.status, c.full_name, c.email
             FROM jobs j
             LEFT JOIN clients c ON j.client_id::uuid = c.id
-            WHERE j.status IN ('quote_accepted', 'payment_pending')
+            WHERE j.status IN ('quote_accepted', 'deposit_paid', 'crew_assigned', 'crew_arrived', 'before_photo', 'clearance_in_progress', 'after_photo', 'work_completed', 'job_verified', 'payment_pending')
             ORDER BY j.created_at DESC
         """)
         results = db.execute(query).fetchall()
@@ -1110,13 +1110,32 @@ async def get_pending_payments(
             except:
                 pass
             
-            # Determine payment type and amount
-            if r[6] == "quote_accepted":
-                payment_type = "Deposit Payment"
-                amount_due = float(r[4]) if r[4] else 0.0
-            else:  # payment_pending
-                payment_type = "Remaining Payment"
-                amount_due = float(r[5]) if r[5] else 0.0
+            job_status = r[6]
+            deposit_amount = float(r[4]) if r[4] else 0.0
+            remaining_amount = float(r[5]) if r[5] else 0.0
+            total_amount = float(r[3]) if r[3] else 0.0
+            
+            # Calculate remaining amount if not set
+            if remaining_amount == 0.0 and total_amount > 0.0 and deposit_amount > 0.0:
+                remaining_amount = total_amount - deposit_amount
+            
+            # Determine payment status based on job status
+            if job_status == "quote_accepted":
+                payment_type = "Deposit Payment Pending"
+                amount_due = deposit_amount
+                status = "Pending"
+            elif job_status in ["deposit_paid", "crew_assigned", "crew_arrived", "before_photo", "clearance_in_progress", "after_photo", "work_completed", "job_verified"]:
+                payment_type = "Deposit Paid"
+                amount_due = 0.0
+                status = "Deposit Paid"
+            elif job_status == "payment_pending":
+                payment_type = "Remaining Amount Pending"
+                amount_due = remaining_amount
+                status = "Pending"
+            else:
+                payment_type = "Unknown"
+                amount_due = 0.0
+                status = "Unknown"
             
             payments.append({
                 "job_id": r[0],
@@ -1124,10 +1143,12 @@ async def get_pending_payments(
                 "client_email": r[8] or "",
                 "property_address": r[1],
                 "service_type": service_type_name,
-                "total_amount": float(r[3]) if r[3] else 0.0,
+                "total_amount": total_amount,
+                "deposit_amount": deposit_amount,
+                "remaining_amount": remaining_amount,
                 "amount_due": amount_due,
                 "payment_type": payment_type,
-                "status": "Payment Pending"
+                "status": status
             })
         
         return payments
