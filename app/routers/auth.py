@@ -31,6 +31,15 @@ async def register_crew(
             detail="Email already registered"
         )
     
+    # Check for duplicate phone number
+    if phone_number:
+        existing_phone = db.query(Crew).filter(Crew.phone_number == phone_number).first()
+        if existing_phone:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number already registered"
+            )
+    
     new_user = Crew(
         email=email,
         full_name=full_name,
@@ -91,6 +100,15 @@ def register_admin(admin_data: AdminRegister, db: Session = Depends(get_db)):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
+    
+    # Check for duplicate phone number
+    if admin_data.phone_number:
+        existing_phone = db.query(Admin).filter(Admin.phone_number == admin_data.phone_number).first()
+        if existing_phone:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number already registered"
+            )
     
     new_user = Admin(
         email=admin_data.email,
