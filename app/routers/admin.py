@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Form
 from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.crew import Admin, Crew
@@ -1229,5 +1229,127 @@ async def get_pending_payments(
             })
         
         return payments
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@router.post("/admin/quotes/{job_id}/reject", tags=["Admin"], summary="Reject Quote Request")
+async def reject_quote_request(
+    job_id: str,
+    rejection_reason: str = Form(...),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Admin rejects a quote request (job_created status)"""
+    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
+    if not admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.status != "job_created":
+        raise HTTPException(status_code=400, detail="Can only reject jobs awaiting quote")
+    
+    job.status = "quote_rejected"
+    job.decline_reason = rejection_reason
+    db.commit()
+    
+    return {
+        "message": "Quote request rejected successfully",
+        "job_id": job.id,
+        "status": job.status,
+        "rejection_reason": rejection_reason
+    }
+
+@router.post("/admin/jobs/{job_id}/cancel", tags=["Admin"], summary="Cancel Job")
+async def cancel_job_by_admin(
+    job_id: str,
+    cancellation_reason: str = Form(...),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Admin cancels an ongoing job"""
+    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
+    if not admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Cannot cancel completed or already cancelled jobs
+    if job.status in ["job_completed", "cancelled", "admin_rejected"]:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel job with status: {job.status}")
+    
+    # If crew was assigned, set them back to available
+    if job.assigned_crew_id:
+        crew = db.query(Crew).filter(Crew.id == job.assigned_crew_id).first()
+        if crew:
+            crew.status = "available"
+    
+    job.status = "cancelled"
+    job.cancellation_reason = cancellation_reason
+    db.commit()
+    
+    return {
+        "message": "Job cancelled successfully",
+        "job_id": job.id,
+        "status": job.status,
+        "cancellation_reason": cancellation_reason
+    }
+
+@router.get("/admin/jobs/rejected-cancelled", tags=["Admin"], summary="Get All Rejected and Cancelled Jobs")
+async def get_rejected_cancelled_jobs(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all jobs that were declined by client or cancelled"""
+    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
+    if not admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        query = text("""
+            SELECT 
+                j.id, j.property_address, j.service_type, j.status,
+                j.decline_reason, j.cancellation_reason, j.updated_at,
+                c.full_name, c.email
+            FROM jobs j
+            LEFT JOIN clients c ON j.client_id::uuid = c.id
+            WHERE j.status IN ('quote_rejected', 'cancelled')
+            ORDER BY j.updated_at DESC
+        """)
+        results = db.execute(query).fetchall()
+        
+        jobs = []
+        for r in results:
+            service_type_name = r[2]
+            try:
+                service_result = db.execute(
+                    text("SELECT name FROM service_types WHERE id = :id"),
+                    {"id": r[2]}
+                ).fetchone()
+                if service_result:
+                    service_type_name = service_result[0]
+            except:
+                pass
+            
+            status = r[3]
+            reason = r[4] if status == "quote_rejected" else r[5]
+            status_display = "Quote Declined" if status == "quote_rejected" else "Job Cancelled"
+            
+            jobs.append({
+                "job_id": r[0],
+                "client_name": r[7] or "Unknown Client",
+                "client_email": r[8] or "",
+                "property_address": r[1],
+                "service_type": service_type_name,
+                "status": status_display,
+                "reason": reason or "",
+                "action_date": r[6].strftime("%d %b %Y") if r[6] else ""
+            })
+        
+        return jobs
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")

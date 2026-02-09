@@ -18,6 +18,7 @@ class Job(Base):
     remaining_amount = Column(Float, nullable=True)
     quote_notes = Column(Text, nullable=True)
     decline_reason = Column(Text, nullable=True)
+    cancellation_reason = Column(Text, nullable=True)
     additional_information = Column(Text, nullable=True)
     urgency_level = Column(String, nullable=True)
     property_size = Column(String, nullable=True)
