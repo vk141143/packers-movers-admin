@@ -24,7 +24,7 @@ def generate_invoice_pdf(job, invoice_number, db):
         from sqlalchemy import text
         try:
             client_result = db.execute(
-                text("SELECT full_name, company_name, email, phone_number FROM clients WHERE id = :id"),
+                text("SELECT full_name, phone_number FROM clients WHERE id = :id"),
                 {"id": job.client_id}
             ).fetchone()
             if client_result:
@@ -33,8 +33,6 @@ def generate_invoice_pdf(job, invoice_number, db):
                 c.setFont("Helvetica", 11)
                 c.drawString(50, height - 200, f"{client_result[0]}")
                 c.drawString(50, height - 215, f"{client_result[1]}")
-                c.drawString(50, height - 230, f"{client_result[2]}")
-                c.drawString(50, height - 245, f"{client_result[3]}")
         except:
             pass
     

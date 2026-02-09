@@ -27,12 +27,34 @@ class PendingCrewResponse(BaseModel):
     phone_number: str
     created_at: str
 
+class RejectedCrewResponse(BaseModel):
+    id: str
+    full_name: str
+    email: str
+    phone_number: str
+    rejected_at: str
+
+class ApprovedCrewResponse(BaseModel):
+    id: str
+    full_name: str
+    email: str
+    phone_number: str
+    approved_at: str
+    status: str
+
 class PendingCrewDetailResponse(BaseModel):
     id: str
     full_name: str
     email: str
     phone_number: str
     address: str
+    vehicle_number: str
+    profile_photo: str
+    drivers_license: str
+    dbs_certificate: str
+    proof_of_address: str
+    insurance_certificate: str
+    right_to_work: str
     role: str
     applied: str
 
@@ -44,6 +66,7 @@ class QuoteResponse(BaseModel):
     quote_id: str
     job_id: str
     client: str
+    client_phone: str
     property_address: str
     service_type: str
     urgency_level: str
@@ -114,7 +137,6 @@ class JobVerificationListResponse(BaseModel):
     job_id: str
     client_name: str
     property_address: str
-    crew_name: str
     scheduled_date: str
     estimated_value: float
     status: str
@@ -216,7 +238,7 @@ async def get_pending_crew(
     if not admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    pending_crew = db.query(Crew).filter(Crew.is_approved == False).all()
+    pending_crew = db.query(Crew).filter(Crew.is_approved == False, Crew.is_rejected == False).all()
     
     return [
         {
@@ -227,6 +249,51 @@ async def get_pending_crew(
             "created_at": crew.created_at.isoformat() if crew.created_at else ""
         }
         for crew in pending_crew
+    ]
+
+@router.get("/admin/crew/rejected", response_model=List[RejectedCrewResponse], tags=["Admin"], summary="Get All Rejected Crew Members")
+async def get_rejected_crew(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
+    if not admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    rejected_crew = db.query(Crew).filter(Crew.is_rejected == True).all()
+    
+    return [
+        {
+            "id": crew.id,
+            "full_name": crew.full_name,
+            "email": crew.email,
+            "phone_number": crew.phone_number or "",
+            "rejected_at": crew.updated_at.isoformat() if crew.updated_at else ""
+        }
+        for crew in rejected_crew
+    ]
+
+@router.get("/admin/crew/approved", response_model=List[ApprovedCrewResponse], tags=["Admin"], summary="Get All Approved Crew Members")
+async def get_approved_crew(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
+    if not admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    approved_crew = db.query(Crew).filter(Crew.is_approved == True).all()
+    
+    return [
+        {
+            "id": crew.id,
+            "full_name": crew.full_name,
+            "email": crew.email,
+            "phone_number": crew.phone_number or "",
+            "approved_at": crew.updated_at.isoformat() if crew.updated_at else "",
+            "status": crew.status or "available"
+        }
+        for crew in approved_crew
     ]
 
 @router.get("/admin/crew/pending/{crew_id}", response_model=PendingCrewDetailResponse, tags=["Admin"])
@@ -248,7 +315,14 @@ async def get_pending_crew_by_id(
         "full_name": crew.full_name,
         "email": crew.email,
         "phone_number": crew.phone_number or "",
-        "address": admin.business_address if admin.business_address else "",
+        "address": crew.address or "",
+        "vehicle_number": crew.vehicle_number or "",
+        "profile_photo": crew.profile_photo or "",
+        "drivers_license": crew.drivers_license or "",
+        "dbs_certificate": crew.dbs_certificate or "",
+        "proof_of_address": crew.proof_of_address or "",
+        "insurance_certificate": crew.insurance_certificate or "",
+        "right_to_work": crew.right_to_work or "",
         "role": "Crew",
         "applied": crew.created_at.strftime("%m/%d/%Y") if crew.created_at else ""
     }
@@ -268,6 +342,7 @@ async def approve_crew(
         raise HTTPException(status_code=404, detail="Crew not found")
     
     crew.is_approved = True
+    crew.approved_by = admin.id
     db.commit()
     
     return {"message": f"Crew {crew.full_name} approved successfully"}
@@ -286,10 +361,11 @@ async def reject_crew(
     if not crew:
         raise HTTPException(status_code=404, detail="Crew not found")
     
-    db.delete(crew)
+    crew.is_rejected = True
+    crew.is_approved = False
     db.commit()
     
-    return {"message": f"Crew {crew.full_name} rejected and removed"}
+    return {"message": f"Crew {crew.full_name} rejected successfully"}
 
 @router.get("/admin/quotes", response_model=List[QuoteResponse], tags=["Admin"], summary="Get All Quotes Created")
 async def get_all_quotes(
@@ -308,13 +384,15 @@ async def get_all_quotes(
     result = []
     for job in jobs:
         client_name = "Client"
+        client_phone = ""
         try:
             client_result = db.execute(
-                text("SELECT full_name FROM clients WHERE id = :id"),
+                text("SELECT full_name, phone_number FROM clients WHERE id = :id"),
                 {"id": job.client_id}
             ).fetchone()
             if client_result:
                 client_name = client_result[0]
+                client_phone = client_result[1] if client_result[1] else ""
         except:
             pass
         
@@ -349,6 +427,7 @@ async def get_all_quotes(
             "quote_id": job.id,
             "job_id": job.id,
             "client": client_name,
+            "client_phone": client_phone,
             "property_address": job.property_address,
             "service_type": service_type_name,
             "urgency_level": urgency_name,
@@ -796,7 +875,7 @@ async def get_jobs_pending_verification(
         client_name = "Unknown Client"
         try:
             client_result = db.execute(
-                text("SELECT company_name FROM clients WHERE id = :id"),
+                text("SELECT full_name FROM clients WHERE id = :id"),
                 {"id": job.client_id}
             ).fetchone()
             if client_result:
@@ -804,19 +883,12 @@ async def get_jobs_pending_verification(
         except:
             pass
         
-        crew_name = "Unknown Crew"
-        if job.assigned_crew_id:
-            crew = db.query(Crew).filter(Crew.id == job.assigned_crew_id).first()
-            if crew:
-                crew_name = crew.full_name
-        
         photos_count = db.query(JobPhoto).filter(JobPhoto.job_id == job.id).count()
         
         result.append({
             "job_id": job.id,
             "client_name": client_name,
             "property_address": job.property_address,
-            "crew_name": crew_name,
             "scheduled_date": job.preferred_date if job.preferred_date else "",
             "estimated_value": job.quote_amount if job.quote_amount else 0.0,
             "status": "Ready to Verify",
@@ -845,7 +917,7 @@ async def get_job_verification_details(
     client_name = "Unknown Client"
     try:
         client_result = db.execute(
-            text("SELECT company_name FROM clients WHERE id = :id"),
+            text("SELECT full_name FROM clients WHERE id = :id"),
             {"id": job.client_id}
         ).fetchone()
         if client_result:
@@ -856,10 +928,16 @@ async def get_job_verification_details(
     crew_name = "Unknown Crew"
     crew_id = ""
     if job.assigned_crew_id:
-        crew = db.query(Crew).filter(Crew.id == job.assigned_crew_id).first()
-        if crew:
-            crew_name = crew.full_name
-            crew_id = crew.id
+        try:
+            crew_result = db.execute(
+                text("SELECT full_name, id FROM crew WHERE id = :id"),
+                {"id": job.assigned_crew_id}
+            ).fetchone()
+            if crew_result:
+                crew_name = crew_result[0]
+                crew_id = crew_result[1]
+        except:
+            pass
     
     service_type_name = job.service_type
     try:
@@ -987,7 +1065,6 @@ async def reject_job_verification(
 @router.post("/admin/verification/jobs/{job_id}/send-payment-request", tags=["Admin"], summary="Send Final Price and Payment Request")
 async def send_payment_request(
     job_id: str,
-    request: SendFinalPriceRequest,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1002,11 +1079,11 @@ async def send_payment_request(
     if job.status != "job_verified":
         raise HTTPException(status_code=400, detail="Job must be verified before sending payment request")
     
-    deposit_paid = job.deposit_amount if job.deposit_amount else 0.0
-    final_price = deposit_paid + request.remaining_amount
+    quote_amount = job.quote_amount if job.quote_amount else 0.0
+    deposit_amount = job.deposit_amount if job.deposit_amount else 0.0
+    remaining_amount = quote_amount - deposit_amount
     
-    job.quote_amount = final_price
-    job.remaining_amount = request.remaining_amount
+    job.remaining_amount = remaining_amount
     job.status = "payment_pending"
     
     db.commit()
@@ -1014,9 +1091,9 @@ async def send_payment_request(
     return {
         "message": "Payment request sent to client successfully",
         "job_id": job.id,
-        "final_price": final_price,
-        "deposit_paid": deposit_paid,
-        "remaining_amount": request.remaining_amount,
+        "quote_amount": quote_amount,
+        "deposit_amount": deposit_amount,
+        "remaining_amount": remaining_amount,
         "status": job.status
     }
 
@@ -1036,7 +1113,7 @@ async def get_completed_payments(
             SELECT 
                 j.id, j.property_address, j.service_type, j.quote_amount,
                 j.deposit_amount, j.remaining_amount, j.updated_at,
-                c.company_name, c.email
+                c.full_name, c.email
             FROM jobs j
             LEFT JOIN clients c ON j.client_id::uuid = c.id
             WHERE j.status = 'job_completed'

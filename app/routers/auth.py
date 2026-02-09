@@ -8,6 +8,7 @@ from app.core.security import hash_password, verify_password, create_access_toke
 from app.core.email import send_admin_notification, send_approval_email, send_otp_email
 from app.core.storage import storage
 from typing import Optional, List
+import re
 
 router = APIRouter()
 
@@ -17,6 +18,8 @@ async def register_crew(
     full_name: str = Form(None),
     password: str = Form(None),
     phone_number: str = Form(None),
+    vehicle_number: str = Form(None),
+    profile_photo: UploadFile = File(default=None),
     drivers_license: UploadFile = File(default=None),
     dbs_certificate: UploadFile = File(default=None),
     proof_of_address: UploadFile = File(default=None),
@@ -40,11 +43,21 @@ async def register_crew(
                 detail="Phone number already registered"
             )
     
+    # Validate UK vehicle registration format
+    if vehicle_number:
+        vehicle_number = vehicle_number.strip().upper().replace(' ', '')
+        if not re.match(r'^[A-Z]{2}[0-9]{2}[A-Z]{3}$', vehicle_number):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid UK vehicle registration format (e.g., AB12CDE)"
+            )
+    
     new_user = Crew(
         email=email,
         full_name=full_name,
         password_hash=hash_password(password),
         phone_number=phone_number,
+        vehicle_number=vehicle_number,
         is_approved=False
     )
     
@@ -54,6 +67,12 @@ async def register_crew(
     
     # Upload documents to Utho storage
     crew_id = new_user.id
+    
+    if profile_photo and profile_photo.filename:
+        url = storage.upload_crew_profile_photo(profile_photo.file, crew_id, profile_photo.filename)
+        if url:
+            new_user.profile_photo = url
+            print(f"Uploaded profile_photo: {url}")
     
     if drivers_license and drivers_license.filename:
         url = storage.upload_crew_document(drivers_license.file, crew_id, "drivers_license", drivers_license.filename)
@@ -195,8 +214,12 @@ def get_crew_profile(current_user: dict = Depends(get_current_user), db: Session
     if not crew:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crew not found")
     
-    # Fetch admin details (assuming there's one admin or get the first one)
-    admin = db.query(Admin).first()
+    # Fetch admin who approved this crew
+    organization_name = None
+    if crew.approved_by:
+        admin = db.query(Admin).filter(Admin.id == crew.approved_by).first()
+        if admin and admin.organization_name:
+            organization_name = admin.organization_name
     
     # Calculate average rating
     avg_rating = db.query(func.avg(Job.rating)).filter(
@@ -210,10 +233,11 @@ def get_crew_profile(current_user: dict = Depends(get_current_user), db: Session
         "full_name": crew.full_name,
         "phone_number": crew.phone_number,
         "address": getattr(crew, 'address', None),
+        "vehicle_number": getattr(crew, 'vehicle_number', None),
+        "profile_photo": getattr(crew, 'profile_photo', None),
         "is_approved": crew.is_approved,
         "rating": round(float(avg_rating), 2) if avg_rating else 0.0,
-        "organization_name": admin.organization_name if admin and admin.organization_name else None,
-        "department": admin.department if admin and admin.department else None,
+        "organization_name": organization_name,
         "created_at": crew.created_at
     }
 
@@ -222,6 +246,8 @@ async def update_crew_profile(
     full_name: str = Form(None),
     phone_number: str = Form(None),
     address: str = Form(None),
+    vehicle_number: str = Form(None),
+    profile_photo: UploadFile = File(None),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -236,6 +262,20 @@ async def update_crew_profile(
     if address:
         crew.address = address
     
+    if vehicle_number:
+        vehicle_number = vehicle_number.strip().upper().replace(' ', '')
+        if not re.match(r'^[A-Z]{2}[0-9]{2}[A-Z]{3}$', vehicle_number):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid UK vehicle registration format (e.g., AB12CDE)"
+            )
+        crew.vehicle_number = vehicle_number
+    
+    if profile_photo and profile_photo.filename:
+        photo_url = storage.upload_crew_profile_photo(profile_photo.file, crew.id, profile_photo.filename)
+        if photo_url:
+            crew.profile_photo = photo_url
+    
     db.commit()
     db.refresh(crew)
     return {
@@ -244,6 +284,8 @@ async def update_crew_profile(
         "full_name": crew.full_name,
         "phone_number": crew.phone_number,
         "address": crew.address,
+        "vehicle_number": crew.vehicle_number,
+        "profile_photo": crew.profile_photo,
         "is_approved": crew.is_approved,
         "created_at": crew.created_at
     }
@@ -461,6 +503,7 @@ def get_admin_profile(current_user: dict = Depends(get_current_user), db: Sessio
         "contact_person": admin.contact_person,
         "department": admin.department,
         "business_address": admin.business_address,
+        "profile_photo": getattr(admin, 'profile_photo', None),
         "account_type": "Admin",
         "status": "Active",
         "verification": "Verified",
@@ -474,6 +517,7 @@ async def update_admin_profile(
     contact_person: str = Form(None),
     department: str = Form(None),
     business_address: str = Form(None),
+    profile_photo: UploadFile = File(None),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -492,6 +536,11 @@ async def update_admin_profile(
     if business_address:
         admin.business_address = business_address
     
+    if profile_photo and profile_photo.filename:
+        photo_url = storage.upload_file(profile_photo.file, f"admin_profiles/{admin.id}", f"profile_{profile_photo.filename}")
+        if photo_url:
+            admin.profile_photo = photo_url
+    
     db.commit()
     db.refresh(admin)
     
@@ -504,6 +553,7 @@ async def update_admin_profile(
         "contact_person": admin.contact_person,
         "department": admin.department,
         "business_address": admin.business_address,
+        "profile_photo": admin.profile_photo,
         "created_at": admin.created_at
     }
 

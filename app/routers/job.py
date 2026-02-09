@@ -89,7 +89,7 @@ async def get_crew_job_by_id(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    from app.models.client import Client
+    from sqlalchemy import text
     
     crew = db.query(Crew).filter(Crew.email == current_user.get("sub")).first()
     if not crew:
@@ -102,12 +102,18 @@ async def get_crew_job_by_id(
     if job.assigned_crew_id != crew.id:
         raise HTTPException(status_code=403, detail="This job is not assigned to you")
     
-    # Get client details
+    # Get client details using raw SQL
     client_name = "Unknown"
     if job.client_id:
-        client = db.query(Client).filter(Client.id == job.client_id).first()
-        if client:
-            client_name = client.full_name
+        try:
+            client_result = db.execute(
+                text("SELECT full_name FROM clients WHERE id = :id"),
+                {"id": job.client_id}
+            ).fetchone()
+            if client_result:
+                client_name = client_result[0]
+        except:
+            pass
     
     # Get service type name
     service_type_name = "Emergency Clearance"

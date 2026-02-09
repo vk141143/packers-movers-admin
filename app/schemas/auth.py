@@ -7,6 +7,7 @@ class CrewRegister(BaseModel):
     full_name: str = Field(..., min_length=2, max_length=100)
     password: str = Field(..., min_length=8)
     phone_number: Optional[str] = None
+    vehicle_number: Optional[str] = None
     drivers_license: Optional[str] = None
     dbs_certificate: Optional[str] = None
     proof_of_address: Optional[str] = None
@@ -24,6 +25,15 @@ class CrewRegister(BaseModel):
         if not v.strip():
             raise ValueError('Full name cannot be empty')
         return v.strip()
+    
+    @validator('vehicle_number')
+    def validate_vehicle_number(cls, v):
+        if v:
+            v = v.strip().upper().replace(' ', '')
+            # UK format: AB12CDE or AB12 CDE
+            if not re.match(r'^[A-Z]{2}[0-9]{2}[A-Z]{3}$', v):
+                raise ValueError('Invalid UK vehicle registration format (e.g., AB12CDE)')
+        return v
 
 class AdminRegister(BaseModel):
     email: EmailStr
@@ -60,6 +70,8 @@ class UserResponse(BaseModel):
     email: str
     full_name: str
     phone_number: Optional[str] = None
+    vehicle_number: Optional[str] = None
+    profile_photo: Optional[str] = None
     drivers_license: Optional[str] = None
     dbs_certificate: Optional[str] = None
     proof_of_address: Optional[str] = None
