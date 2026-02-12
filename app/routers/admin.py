@@ -868,7 +868,9 @@ async def get_jobs_pending_verification(
     if not admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    jobs = db.query(Job).filter(Job.status == "work_completed").order_by(Job.updated_at.desc()).all()
+    jobs = db.query(Job).filter(
+        Job.status.in_(["work_completed", "job_verified", "payment_pending"])
+    ).order_by(Job.updated_at.desc()).all()
     
     result = []
     for job in jobs:
@@ -885,13 +887,19 @@ async def get_jobs_pending_verification(
         
         photos_count = db.query(JobPhoto).filter(JobPhoto.job_id == job.id).count()
         
+        # Set status based on job status
+        if job.status == "work_completed":
+            status_display = "Ready to Verify"
+        else:  # job_verified or payment_pending
+            status_display = "Verified"
+        
         result.append({
             "job_id": job.id,
             "client_name": client_name,
             "property_address": job.property_address,
             "scheduled_date": job.preferred_date if job.preferred_date else "",
             "estimated_value": job.quote_amount if job.quote_amount else 0.0,
-            "status": "Ready to Verify",
+            "status": status_display,
             "photos_count": photos_count
         })
     
@@ -1113,7 +1121,7 @@ async def get_completed_payments(
             SELECT 
                 j.id, j.property_address, j.service_type, j.quote_amount,
                 j.deposit_amount, j.remaining_amount, j.updated_at,
-                c.full_name, c.email
+                c.full_name, c.email, c.phone_number
             FROM jobs j
             LEFT JOIN clients c ON j.client_id::uuid = c.id
             WHERE j.status = 'job_completed'
@@ -1138,6 +1146,7 @@ async def get_completed_payments(
                 "job_id": r[0],
                 "client_name": r[7] or "Unknown Client",
                 "client_email": r[8] or "",
+                "client_phone": r[9] or "",
                 "property_address": r[1],
                 "service_type": service_type_name,
                 "total_amount": float(r[3]) if r[3] else 0.0,
@@ -1166,7 +1175,7 @@ async def get_pending_payments(
         query = text("""
             SELECT 
                 j.id, j.property_address, j.service_type, j.quote_amount,
-                j.deposit_amount, j.remaining_amount, j.status, c.full_name, c.email
+                j.deposit_amount, j.remaining_amount, j.status, c.full_name, c.email, c.phone_number
             FROM jobs j
             LEFT JOIN clients c ON j.client_id::uuid = c.id
             WHERE j.status IN ('quote_accepted', 'deposit_paid', 'crew_assigned', 'crew_arrived', 'before_photo', 'clearance_in_progress', 'after_photo', 'work_completed', 'job_verified', 'payment_pending')
@@ -1218,6 +1227,7 @@ async def get_pending_payments(
                 "job_id": r[0],
                 "client_name": r[7] or "Unknown Client",
                 "client_email": r[8] or "",
+                "client_phone": r[9] or "",
                 "property_address": r[1],
                 "service_type": service_type_name,
                 "total_amount": total_amount,
@@ -1231,6 +1241,92 @@ async def get_pending_payments(
         return payments
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@router.get("/admin/payments/pending/{job_id}", tags=["Admin"], summary="Get Pending Payment Details by ID")
+async def get_pending_payment_by_id(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get detailed payment information for a specific job"""
+    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
+    if not admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.status not in ['quote_accepted', 'deposit_paid', 'crew_assigned', 'crew_arrived', 'before_photo', 'clearance_in_progress', 'after_photo', 'work_completed', 'job_verified', 'payment_pending']:
+        raise HTTPException(status_code=400, detail="Job is not in a payment-related status")
+    
+    client_name = "Unknown Client"
+    client_email = ""
+    client_phone = ""
+    try:
+        client_result = db.execute(
+            text("SELECT full_name, email, phone_number FROM clients WHERE id = :id"),
+            {"id": job.client_id}
+        ).fetchone()
+        if client_result:
+            client_name = client_result[0] or "Unknown Client"
+            client_email = client_result[1] or ""
+            client_phone = client_result[2] or ""
+    except:
+        pass
+    
+    service_type_name = job.service_type
+    try:
+        service_result = db.execute(
+            text("SELECT name FROM service_types WHERE id = :id"),
+            {"id": job.service_type}
+        ).fetchone()
+        if service_result:
+            service_type_name = service_result[0]
+    except:
+        pass
+    
+    deposit_amount = float(job.deposit_amount) if job.deposit_amount else 0.0
+    remaining_amount = float(job.remaining_amount) if job.remaining_amount else 0.0
+    total_amount = float(job.quote_amount) if job.quote_amount else 0.0
+    
+    if remaining_amount == 0.0 and total_amount > 0.0 and deposit_amount > 0.0:
+        remaining_amount = total_amount - deposit_amount
+    
+    if job.status == "quote_accepted":
+        payment_type = "Deposit Payment Pending"
+        amount_due = deposit_amount
+        status = "Pending"
+    elif job.status in ["deposit_paid", "crew_assigned", "crew_arrived", "before_photo", "clearance_in_progress", "after_photo", "work_completed", "job_verified"]:
+        payment_type = "Deposit Paid"
+        amount_due = 0.0
+        status = "Deposit Paid"
+    elif job.status == "payment_pending":
+        payment_type = "Remaining Amount Pending"
+        amount_due = remaining_amount
+        status = "Pending"
+    else:
+        payment_type = "Unknown"
+        amount_due = 0.0
+        status = "Unknown"
+    
+    return {
+        "job_id": job.id,
+        "client_name": client_name,
+        "client_email": client_email,
+        "client_phone": client_phone,
+        "property_address": job.property_address,
+        "service_type": service_type_name,
+        "total_amount": total_amount,
+        "deposit_amount": deposit_amount,
+        "remaining_amount": remaining_amount,
+        "amount_due": amount_due,
+        "payment_type": payment_type,
+        "status": status,
+        "job_status": job.status,
+        "preferred_date": job.preferred_date if job.preferred_date else "",
+        "preferred_time": job.preferred_time if job.preferred_time else ""
+    }
 
 @router.post("/admin/quotes/{job_id}/reject", tags=["Admin"], summary="Reject Quote Request")
 async def reject_quote_request(
@@ -1353,3 +1449,71 @@ async def get_rejected_cancelled_jobs(
         return jobs
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@router.get("/admin/jobs/verified", tags=["Admin"], summary="Get All Verified Jobs")
+async def get_verified_jobs(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all jobs that have been verified by admin"""
+    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
+    if not admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    jobs = db.query(Job).filter(
+        Job.status.in_(["job_verified", "payment_pending", "job_completed"])
+    ).order_by(Job.updated_at.desc()).all()
+    
+    result = []
+    for job in jobs:
+        client_name = "Unknown Client"
+        try:
+            client_result = db.execute(
+                text("SELECT full_name FROM clients WHERE id = :id"),
+                {"id": job.client_id}
+            ).fetchone()
+            if client_result:
+                client_name = client_result[0]
+        except:
+            pass
+        
+        crew_name = "Unknown Crew"
+        if job.assigned_crew_id:
+            crew = db.query(Crew).filter(Crew.id == job.assigned_crew_id).first()
+            if crew:
+                crew_name = crew.full_name
+        
+        service_type_name = job.service_type
+        try:
+            service_result = db.execute(
+                text("SELECT name FROM service_types WHERE id = :id"),
+                {"id": job.service_type}
+            ).fetchone()
+            if service_result:
+                service_type_name = service_result[0]
+        except:
+            pass
+        
+        photos_count = db.query(JobPhoto).filter(JobPhoto.job_id == job.id).count()
+        
+        status_display = "Verified"
+        if job.status == "payment_pending":
+            status_display = "Payment Pending"
+        elif job.status == "job_completed":
+            status_display = "Completed"
+        
+        result.append({
+            "job_id": job.id,
+            "client_name": client_name,
+            "crew_name": crew_name,
+            "property_address": job.property_address,
+            "service_type": service_type_name,
+            "quote_amount": job.quote_amount if job.quote_amount else 0.0,
+            "deposit_amount": job.deposit_amount if job.deposit_amount else 0.0,
+            "remaining_amount": job.remaining_amount if job.remaining_amount else 0.0,
+            "verified_at": job.updated_at.isoformat() if job.updated_at else "",
+            "photos_count": photos_count,
+            "status": status_display
+        })
+    
+    return result

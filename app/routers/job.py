@@ -26,7 +26,11 @@ async def get_crew_jobs(
     if not crew:
         raise HTTPException(status_code=403, detail="Crew access required")
     
-    jobs = db.query(Job).filter(Job.assigned_crew_id == crew.id).order_by(Job.created_at.desc()).all()
+    # Exclude payment_pending and job_completed statuses
+    jobs = db.query(Job).filter(
+        Job.assigned_crew_id == crew.id,
+        Job.status.notin_(["payment_pending", "job_completed"])
+    ).order_by(Job.created_at.desc()).all()
     
     result = []
     for job in jobs:
@@ -104,14 +108,16 @@ async def get_crew_job_by_id(
     
     # Get client details using raw SQL
     client_name = "Unknown"
+    client_phone = ""
     if job.client_id:
         try:
             client_result = db.execute(
-                text("SELECT full_name FROM clients WHERE id = :id"),
+                text("SELECT full_name, phone_number FROM clients WHERE id = :id"),
                 {"id": job.client_id}
             ).fetchone()
             if client_result:
                 client_name = client_result[0]
+                client_phone = client_result[1] if client_result[1] else ""
         except:
             pass
     
@@ -133,6 +139,7 @@ async def get_crew_job_by_id(
         "scheduled_date": job.preferred_date if job.preferred_date else "",
         "scheduled_time": job.preferred_time if job.preferred_time else "",
         "client_name": client_name,
+        "client_phone": client_phone,
         "service_type": service_type_name,
         "property_address": job.property_address
     }
