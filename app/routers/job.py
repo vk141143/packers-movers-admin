@@ -161,8 +161,8 @@ async def crew_arrive(
     if job.assigned_crew_id != crew.id:
         raise HTTPException(status_code=403, detail="This job is not assigned to you")
     
-    if job.status != "crew_assigned":
-        raise HTTPException(status_code=400, detail=f"Job must be in crew_assigned status. Current status: {job.status}")
+    if job.status not in ["crew_assigned", "clearance_in_progress"]:
+        raise HTTPException(status_code=400, detail=f"Job must be in crew_assigned or clearance_in_progress status. Current status: {job.status}")
     
     job.status = "crew_arrived"
     db.commit()
@@ -186,8 +186,8 @@ async def upload_before_photo(
     if job.assigned_crew_id != crew.id:
         raise HTTPException(status_code=403, detail="This job is not assigned to you")
     
-    if job.status != "crew_arrived":
-        raise HTTPException(status_code=400, detail=f"Job must be in crew_arrived status. Current status: {job.status}")
+    if job.status not in ["crew_arrived", "clearance_in_progress"]:
+        raise HTTPException(status_code=400, detail=f"Job must be in crew_arrived or clearance_in_progress status. Current status: {job.status}")
     
     from app.models.photo import JobPhoto
     uploaded_files = []
@@ -226,8 +226,8 @@ async def upload_after_photo(
     if job.assigned_crew_id != crew.id:
         raise HTTPException(status_code=403, detail="This job is not assigned to you")
     
-    if job.status != "before_photo":
-        raise HTTPException(status_code=400, detail=f"Job must be in before_photo status. Current status: {job.status}")
+    if job.status not in ["before_photo", "clearance_in_progress", "after_photo"]:
+        raise HTTPException(status_code=400, detail=f"Job must be in before_photo, clearance_in_progress, or after_photo status. Current status: {job.status}")
     
     from app.models.photo import JobPhoto
     uploaded_files = []
