@@ -27,6 +27,28 @@ async def register_crew(
     right_to_work: UploadFile = File(default=None),
     db: Session = Depends(get_db)
 ):
+    # Validate file sizes (5MB per file)
+    MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+    files = [
+        (profile_photo, "Profile photo"),
+        (drivers_license, "Drivers license"),
+        (dbs_certificate, "DBS certificate"),
+        (proof_of_address, "Proof of address"),
+        (insurance_certificate, "Insurance certificate"),
+        (right_to_work, "Right to work")
+    ]
+    
+    for file, name in files:
+        if file and file.filename:
+            file.file.seek(0, 2)  # Seek to end
+            file_size = file.file.tell()  # Get size
+            file.file.seek(0)  # Reset to start
+            
+            if file_size > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"{name} exceeds 5MB limit. Current size: {file_size / 1024 / 1024:.2f}MB"
+                )
     existing_user = db.query(Crew).filter(Crew.email == email).first()
     if existing_user:
         raise HTTPException(
