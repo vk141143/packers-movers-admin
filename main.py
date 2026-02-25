@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth, job, crew, workflow, admin
+from app.routers import auth, job, workflow, admin
 from app.database.db import init_db, engine
 from app.models.crew import Crew, Admin
 from app.models.job import Job
@@ -42,7 +42,6 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/auth")
 app.include_router(job.router, prefix="/api")
-app.include_router(crew.router, prefix="/api")
 app.include_router(workflow.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 

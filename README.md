@@ -111,15 +111,9 @@ Response:
 
 Returns pending verification count, total value, and average job value.
 
-#### Get All Jobs Pending Verification
-**GET** `/api/admin/verification/jobs`
+<!-- Removed: GET /api/admin/verification/jobs -->
 
-Returns list of all jobs submitted by crew for admin verification.
-
-#### Get Job Verification Details
-**GET** `/api/admin/verification/jobs/{job_id}`
-
-Returns detailed job information including before/after photos, checklist status, and crew details.
+<!-- Removed detailed job verification endpoint -->
 
 #### Approve Job Verification
 **POST** `/api/admin/verification/jobs/{job_id}/approve`
@@ -142,19 +136,9 @@ Rejects the job and sends it back to crew for resubmission.
 ### Crew Management (Admin)
 
 #### Get Pending Crew Approvals
-**GET** `/api/admin/crew/pending`
+<!-- Removed: GET /api/admin/crew/pending -->
 
-Returns list of crew members awaiting approval.
-
-#### Approve Crew
-**PUT** `/api/admin/crew/{crew_id}/approve`
-
-Approves a crew member for job assignments.
-
-#### Reject Crew
-**DELETE** `/api/admin/crew/{crew_id}/reject`
-
-Rejects and removes a crew member.
+<!-- Removed: Approve/Reject crew endpoints -->
 
 ### Job Management (Admin)
 
@@ -163,15 +147,7 @@ Rejects and removes a crew member.
 
 Returns all active jobs with their current status.
 
-#### Get Available Crew
-**GET** `/api/admin/crew/available`
-
-Returns list of available crew members for job assignment.
-
-#### Assign Crew to Job
-**POST** `/api/admin/jobs/{job_id}/assign-crew/{crew_id}`
-
-Assigns a crew member to a specific job.
+<!-- Removed: Get Available Crew and Assign Crew endpoints -->
 
 ### Crew Workflow
 

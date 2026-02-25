@@ -12,6 +12,7 @@ class Job(Base):
     property_address = Column(Text, nullable=False)
     preferred_date = Column(String, nullable=False)
     preferred_time = Column(String, nullable=False)
+    access_difficulty = Column(String, nullable=True)
     property_photos = Column(Text, nullable=True)
     quote_amount = Column(Float, nullable=True)
     deposit_amount = Column(Float, nullable=True)

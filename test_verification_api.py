@@ -25,32 +25,14 @@ def test_verification_stats():
     return response.status_code == 200
 
 def test_get_pending_verifications():
-    """Test getting all pending verifications"""
-    print("\n=== Testing Get Pending Verifications ===")
-    response = requests.get(f"{BASE_URL}/admin/verification/jobs", headers=headers)
-    print(f"Status Code: {response.status_code}")
-    data = response.json()
-    print(f"Found {len(data)} jobs pending verification")
-    if data:
-        print(f"First job: {json.dumps(data[0], indent=2)}")
-    return response.status_code == 200, data
+    """Endpoint removed; skip getting pending verifications"""
+    print("\n=== Skipping Get Pending Verifications (endpoint removed) ===")
+    return False, []
 
 def test_get_job_details(job_id):
-    """Test getting job verification details"""
-    print(f"\n=== Testing Get Job Details for {job_id} ===")
-    response = requests.get(f"{BASE_URL}/admin/verification/jobs/{job_id}", headers=headers)
-    print(f"Status Code: {response.status_code}")
-    if response.status_code == 200:
-        data = response.json()
-        print(f"Job ID: {data['job_id']}")
-        print(f"Client: {data['client_name']}")
-        print(f"Crew: {data['crew_name']}")
-        print(f"Before Photos: {len(data['before_photos'])}")
-        print(f"After Photos: {len(data['after_photos'])}")
-        print(f"Checklist Completed: {data['checklist_completed']}")
-    else:
-        print(f"Response: {response.json()}")
-    return response.status_code == 200
+    """Job verification detail endpoint has been removed; skip."""
+    print(f"\n=== Skipping Get Job Details for {job_id} (endpoint removed) ===")
+    return False
 
 def test_approve_job(job_id):
     """Test approving a job"""
@@ -98,19 +80,13 @@ def run_all_tests():
     # Test 2: Get pending verifications
     pending_ok, jobs = test_get_pending_verifications()
     
-    # Test 3: Get job details (if jobs exist)
+    # Test 3: (job details endpoint removed) - skip details retrieval
     if pending_ok and jobs:
         job_id = jobs[0]['job_id']
-        details_ok = test_get_job_details(job_id)
-        
-        # Test 4 & 5: Approve/Reject (commented out to avoid modifying data)
+        print(f"Skipping details retrieval for job {job_id} (endpoint removed)")
         print("\n⚠️  Approve/Reject tests are commented out to avoid modifying data")
         print(f"To test approval: test_approve_job('{job_id}')")
         print(f"To test rejection: test_reject_job('{job_id}')")
-        
-        # Uncomment to test (WARNING: This will modify the job status!)
-        # approve_ok = test_approve_job(job_id)
-        # reject_ok = test_reject_job(job_id)
     else:
         print("\n⚠️  No jobs pending verification. Create a test job first.")
     

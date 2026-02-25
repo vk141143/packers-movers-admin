@@ -12,127 +12,6 @@ import re
 
 router = APIRouter()
 
-@router.post("/register/crew", response_model=UserResponse, status_code=status.HTTP_201_CREATED, tags=["Authentication"])
-async def register_crew(
-    email: str = Form(None),
-    full_name: str = Form(None),
-    password: str = Form(None),
-    phone_number: str = Form(None),
-    vehicle_number: str = Form(None),
-    profile_photo: UploadFile = File(default=None),
-    drivers_license: UploadFile = File(default=None),
-    dbs_certificate: UploadFile = File(default=None),
-    proof_of_address: UploadFile = File(default=None),
-    insurance_certificate: UploadFile = File(default=None),
-    right_to_work: UploadFile = File(default=None),
-    db: Session = Depends(get_db)
-):
-    # Validate file sizes (5MB per file)
-    MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
-    files = [
-        (profile_photo, "Profile photo"),
-        (drivers_license, "Drivers license"),
-        (dbs_certificate, "DBS certificate"),
-        (proof_of_address, "Proof of address"),
-        (insurance_certificate, "Insurance certificate"),
-        (right_to_work, "Right to work")
-    ]
-    
-    for file, name in files:
-        if file and file.filename:
-            file.file.seek(0, 2)  # Seek to end
-            file_size = file.file.tell()  # Get size
-            file.file.seek(0)  # Reset to start
-            
-            if file_size > MAX_FILE_SIZE:
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=f"{name} exceeds 5MB limit. Current size: {file_size / 1024 / 1024:.2f}MB"
-                )
-    existing_user = db.query(Crew).filter(Crew.email == email).first()
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
-    
-    # Check for duplicate phone number
-    if phone_number:
-        existing_phone = db.query(Crew).filter(Crew.phone_number == phone_number).first()
-        if existing_phone:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Phone number already registered"
-            )
-    
-    # Validate UK vehicle registration format
-    if vehicle_number:
-        vehicle_number = vehicle_number.strip().upper().replace(' ', '')
-        if not re.match(r'^[A-Z]{2}[0-9]{2}[A-Z]{3}$', vehicle_number):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid UK vehicle registration format (e.g., AB12CDE)"
-            )
-    
-    new_user = Crew(
-        email=email,
-        full_name=full_name,
-        password_hash=hash_password(password),
-        phone_number=phone_number,
-        vehicle_number=vehicle_number,
-        is_approved=False
-    )
-    
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    # Upload documents to Utho storage
-    crew_id = new_user.id
-    
-    if profile_photo and profile_photo.filename:
-        url = storage.upload_crew_profile_photo(profile_photo.file, crew_id, profile_photo.filename)
-        if url:
-            new_user.profile_photo = url
-            print(f"Uploaded profile_photo: {url}")
-    
-    if drivers_license and drivers_license.filename:
-        url = storage.upload_crew_document(drivers_license.file, crew_id, "drivers_license", drivers_license.filename)
-        if url:
-            new_user.drivers_license = url
-            print(f"Uploaded drivers_license: {url}")
-    
-    if dbs_certificate and dbs_certificate.filename:
-        url = storage.upload_crew_document(dbs_certificate.file, crew_id, "dbs_certificate", dbs_certificate.filename)
-        if url:
-            new_user.dbs_certificate = url
-            print(f"Uploaded dbs_certificate: {url}")
-    
-    if proof_of_address and proof_of_address.filename:
-        url = storage.upload_crew_document(proof_of_address.file, crew_id, "proof_of_address", proof_of_address.filename)
-        if url:
-            new_user.proof_of_address = url
-            print(f"Uploaded proof_of_address: {url}")
-    
-    if insurance_certificate and insurance_certificate.filename:
-        url = storage.upload_crew_document(insurance_certificate.file, crew_id, "insurance_certificate", insurance_certificate.filename)
-        if url:
-            new_user.insurance_certificate = url
-            print(f"Uploaded insurance_certificate: {url}")
-    
-    if right_to_work and right_to_work.filename:
-        url = storage.upload_crew_document(right_to_work.file, crew_id, "right_to_work", right_to_work.filename)
-        if url:
-            new_user.right_to_work = url
-            print(f"Uploaded right_to_work: {url}")
-    
-    db.commit()
-    db.refresh(new_user)
-    
-    send_admin_notification(email, full_name)
-    
-    return new_user
-
 @router.post("/register/admin", response_model=UserResponse, status_code=status.HTTP_201_CREATED, tags=["Authentication"])
 def register_admin(admin_data: AdminRegister, db: Session = Depends(get_db)):
     existing_user = db.query(Admin).filter(Admin.email == admin_data.email).first()
@@ -151,39 +30,23 @@ def register_admin(admin_data: AdminRegister, db: Session = Depends(get_db)):
                 detail="Phone number already registered"
             )
     
-    new_user = Admin(
-        email=admin_data.email,
-        full_name=admin_data.full_name,
-        password_hash=hash_password(admin_data.password),
-        phone_number=admin_data.phone_number
-    )
-    
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    return new_user
+    try:
+        new_user = Admin(
+            email=admin_data.email,
+            full_name=admin_data.full_name,
+            password_hash=hash_password(admin_data.password),
+            phone_number=admin_data.phone_number
+        )
 
-@router.post("/login/crew", response_model=TokenResponse, tags=["Authentication"])
-def login_crew(login_data: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(Crew).filter(Crew.email == login_data.email).first()
-    
-    if not user or not verify_password(login_data.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
-        )
-    
-    if not user.is_approved:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your account is pending admin approval"
-        )
-    
-    access_token = create_access_token({"sub": user.email, "role": "Crew"})
-    refresh_token = create_refresh_token({"sub": user.email, "role": "Crew"})
-    
-    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+
+        return new_user
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 @router.post("/login/admin", response_model=TokenResponse, tags=["Authentication"])
 def login_admin(login_data: LoginRequest, db: Session = Depends(get_db)):
@@ -226,190 +89,6 @@ def refresh_token(request: RefreshTokenRequest, db: Session = Depends(get_db)):
     refresh_token = create_refresh_token({"sub": user.email, "role": role})
     
     return TokenResponse(access_token=access_token, refresh_token=refresh_token)
-
-@router.get("/crew/profile", tags=["Crew"])
-def get_crew_profile(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    from sqlalchemy import func
-    from app.models.job import Job
-    
-    crew = db.query(Crew).filter(Crew.email == current_user["sub"]).first()
-    if not crew:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crew not found")
-    
-    # Fetch admin who approved this crew
-    organization_name = None
-    if crew.approved_by:
-        admin = db.query(Admin).filter(Admin.id == crew.approved_by).first()
-        if admin and admin.organization_name:
-            organization_name = admin.organization_name
-    
-    # Calculate average rating
-    avg_rating = db.query(func.avg(Job.rating)).filter(
-        Job.assigned_crew_id == crew.id,
-        Job.rating.isnot(None)
-    ).scalar()
-    
-    return {
-        "id": crew.id,
-        "email": crew.email,
-        "full_name": crew.full_name,
-        "phone_number": crew.phone_number,
-        "address": getattr(crew, 'address', None),
-        "vehicle_number": getattr(crew, 'vehicle_number', None),
-        "profile_photo": getattr(crew, 'profile_photo', None),
-        "is_approved": crew.is_approved,
-        "rating": round(float(avg_rating), 2) if avg_rating else 0.0,
-        "organization_name": organization_name,
-        "created_at": crew.created_at
-    }
-
-@router.patch("/crew/profile", tags=["Crew"])
-async def update_crew_profile(
-    full_name: str = Form(None),
-    phone_number: str = Form(None),
-    address: str = Form(None),
-    vehicle_number: str = Form(None),
-    profile_photo: UploadFile = File(None),
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    crew = db.query(Crew).filter(Crew.email == current_user["sub"]).first()
-    if not crew:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crew not found")
-    
-    if full_name:
-        crew.full_name = full_name
-    if phone_number:
-        crew.phone_number = phone_number
-    if address:
-        crew.address = address
-    
-    if vehicle_number:
-        vehicle_number = vehicle_number.strip().upper().replace(' ', '')
-        if not re.match(r'^[A-Z]{2}[0-9]{2}[A-Z]{3}$', vehicle_number):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid UK vehicle registration format (e.g., AB12CDE)"
-            )
-        crew.vehicle_number = vehicle_number
-    
-    if profile_photo and profile_photo.filename:
-        photo_url = storage.upload_crew_profile_photo(profile_photo.file, crew.id, profile_photo.filename)
-        if photo_url:
-            crew.profile_photo = photo_url
-    
-    db.commit()
-    db.refresh(crew)
-    return {
-        "id": crew.id,
-        "email": crew.email,
-        "full_name": crew.full_name,
-        "phone_number": crew.phone_number,
-        "address": crew.address,
-        "vehicle_number": crew.vehicle_number,
-        "profile_photo": crew.profile_photo,
-        "is_approved": crew.is_approved,
-        "created_at": crew.created_at
-    }
-
-# Forgot Password for Crew
-@router.post("/forgot-password/crew", tags=["Authentication"])
-def forgot_password_crew(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    import random
-    from datetime import datetime, timedelta
-    from app.core.sms import send_sms_otp
-    
-    # Find user by email or phone
-    if data.contact_method == "email":
-        user = db.query(Crew).filter(Crew.email == data.email).first()
-    else:  # phone
-        user = db.query(Crew).filter(Crew.phone_number == data.phone_number).first()
-    
-    if user and user.is_approved:
-        if data.contact_method == "email":
-            # Email OTP - store in DB
-            otp = str(random.randint(100000, 999999))  # 6-digit OTP
-            user.reset_otp = otp
-            user.reset_otp_expiry = datetime.utcnow() + timedelta(minutes=5)
-            db.commit()
-            send_otp_email(data.email, otp)
-        else:  # phone - use Twilio (no DB storage)
-            user.reset_otp = None
-            user.reset_otp_expiry = None
-            db.commit()
-            send_sms_otp(data.phone_number)
-    
-    return {
-        "message": f"If {'email' if data.contact_method == 'email' else 'phone number'} exists, OTP has been sent",
-        "contact_method": data.contact_method
-    }
-
-@router.post("/verify-forgot-otp/crew", tags=["Authentication"])
-def verify_forgot_otp_crew(data: VerifyForgotOTPRequest, db: Session = Depends(get_db)):
-    import secrets
-    from datetime import datetime, timedelta
-    from app.core.sms import verify_sms_otp
-    
-    # Find user by email or phone
-    if data.contact_method == "email":
-        user = db.query(Crew).filter(Crew.email == data.email).first()
-    else:  # phone
-        user = db.query(Crew).filter(Crew.phone_number == data.phone_number).first()
-    
-    if not user:
-        raise HTTPException(status_code=400, detail="Invalid OTP")
-    
-    # Verify based on contact method
-    if data.contact_method == "phone":
-        # Verify with Twilio
-        if not verify_sms_otp(data.phone_number, data.otp):
-            raise HTTPException(status_code=400, detail="Invalid OTP")
-    else:
-        # Verify from database for email
-        if not user.reset_otp or user.reset_otp != data.otp:
-            raise HTTPException(status_code=400, detail="Invalid OTP")
-        
-        if user.reset_otp_expiry < datetime.utcnow():
-            raise HTTPException(status_code=400, detail="OTP expired")
-    
-    reset_token = secrets.token_urlsafe(32)
-    user.reset_token = reset_token
-    user.reset_token_expiry = datetime.utcnow() + timedelta(minutes=15)
-    user.reset_otp = None
-    user.reset_otp_expiry = None
-    
-    db.commit()
-    
-    return {
-        "message": "OTP verified successfully",
-        "reset_token": reset_token
-    }
-
-@router.post("/reset-password/crew", tags=["Authentication"])
-def reset_password_crew(data: ResetPasswordRequest, db: Session = Depends(get_db)):
-    from datetime import datetime
-    
-    if data.new_password != data.confirm_password:
-        raise HTTPException(status_code=400, detail="Passwords do not match")
-    
-    if len(data.new_password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    
-    user = db.query(Crew).filter(Crew.reset_token == data.reset_token).first()
-    
-    if not user:
-        raise HTTPException(status_code=400, detail="Invalid reset token")
-    
-    if user.reset_token_expiry < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Reset token expired")
-    
-    user.password_hash = hash_password(data.new_password)
-    user.reset_token = None
-    user.reset_token_expiry = None
-    
-    db.commit()
-    
-    return {"message": "Password reset successfully"}
 
 # Forgot Password for Admin
 @router.post("/forgot-password/admin", tags=["Authentication"])
@@ -577,36 +256,6 @@ async def update_admin_profile(
         "business_address": admin.business_address,
         "profile_photo": admin.profile_photo,
         "created_at": admin.created_at
-    }
-
-@router.post("/resend-otp/crew", tags=["Authentication"])
-def resend_otp_crew(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    import random
-    from datetime import datetime, timedelta
-    from app.core.sms import send_sms_otp
-    
-    if data.contact_method == "email":
-        user = db.query(Crew).filter(Crew.email == data.email).first()
-    else:
-        user = db.query(Crew).filter(Crew.phone_number == data.phone_number).first()
-    
-    if user and user.is_approved:
-        if data.contact_method == "email":
-            # Email OTP - store in DB
-            otp = str(random.randint(100000, 999999))  # 6-digit OTP
-            user.reset_otp = otp
-            user.reset_otp_expiry = datetime.utcnow() + timedelta(minutes=5)
-            db.commit()
-            send_otp_email(data.email, otp)
-        else:  # phone - use Twilio (no DB storage)
-            user.reset_otp = None
-            user.reset_otp_expiry = None
-            db.commit()
-            send_sms_otp(data.phone_number)
-    
-    return {
-        "message": f"OTP resent successfully via {data.contact_method}",
-        "contact_method": data.contact_method
     }
 
 @router.post("/resend-otp/admin", tags=["Authentication"])

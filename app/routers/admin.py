@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Form
 from sqlalchemy.orm import Session
 from app.database.db import get_db
-from app.models.crew import Admin, Crew
+from app.models.crew import Admin
 from app.models.job import Job
 from app.models.photo import JobPhoto
 from app.core.security import get_current_user
@@ -11,12 +11,54 @@ from typing import List, Optional
 from datetime import datetime
 
 router = APIRouter()
+import re
+
+
+def resolve_client(db, client_identifier):
+    """Return (full_name, phone_number, email) for a given client identifier.
+    Tries multiple matching strategies and logs failures for debugging.
+    """
+    default = ("Client", "", None)
+    if not client_identifier:
+        return default
+
+    id_raw = str(client_identifier).strip()
+    # clean common wrappers
+    id_clean = id_raw.strip().strip('"').strip("'").strip('{}')
+
+    # prefer explicit uuid substring if present
+    m = re.search(r'([0-9a-fA-F\-]{36})', id_clean)
+    candidates = []
+    if m:
+        candidates.append(m.group(1))
+    candidates.append(id_clean)
+
+    for cand in candidates:
+        try:
+            client_result = db.execute(
+                text("SELECT full_name, phone_number, email FROM clients WHERE id::text = :id OR lower(email) = lower(:id) OR phone_number = :id"),
+                {"id": cand}
+            ).fetchone()
+            if client_result:
+                full_name = client_result[0] if client_result[0] else "Client"
+                phone = client_result[1] if client_result[1] else ""
+                email = client_result[2] if len(client_result) > 2 and client_result[2] else None
+                return (full_name, phone, email)
+        except Exception as e:
+            print(f"[resolve_client] query error for candidate={cand}: {e}")
+
+    print(f"[resolve_client] no client found for raw id={id_raw}")
+    return default
 
 class ActiveJobResponse(BaseModel):
     job_id: str
     client: str
-    property: str
-    crew: str
+    client_email: Optional[str] = None
+    property_address: str
+    crew: Optional[str] = None
+    date: Optional[str] = None
+    quote_amount: float = 0.0
+    waste_types: Optional[List[str]] = None
     status: str
     action: str
 
@@ -27,20 +69,9 @@ class PendingCrewResponse(BaseModel):
     phone_number: str
     created_at: str
 
-class RejectedCrewResponse(BaseModel):
-    id: str
-    full_name: str
-    email: str
-    phone_number: str
-    rejected_at: str
 
-class ApprovedCrewResponse(BaseModel):
-    id: str
-    full_name: str
-    email: str
-    phone_number: str
-    approved_at: str
-    status: str
+
+
 
 class PendingCrewDetailResponse(BaseModel):
     id: str
@@ -66,14 +97,13 @@ class QuoteResponse(BaseModel):
     quote_id: str
     job_id: str
     client: str
+    client_email: Optional[str] = None
     client_phone: str
     property_address: str
-    service_type: str
     urgency_level: str
-    sla_hours: str
-    van_loads: str
+    waste_types: Optional[List[str]] = None
+    van_loads: Optional[str] = None
     preferred_date: str
-    deposit_price: float
     additional_information: str
     status: str
     property_photos: str
@@ -150,7 +180,7 @@ class SendFinalPriceRequest(BaseModel):
 
 
 
-@router.get("/admin/dashboard/active-jobs", response_model=List[ActiveJobResponse], tags=["Admin"])
+@router.get("/admin/dashboard/active-jobs", response_model=List[ActiveJobResponse], response_model_exclude_none=True, tags=["Admin"])
 async def get_active_jobs_dashboard(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -167,23 +197,13 @@ async def get_active_jobs_dashboard(
     result = []
     for job in jobs:
         # Get client info from client backend database
-        client_name = "Client"
-        try:
-            client_result = db.execute(
-                text("SELECT full_name FROM clients WHERE id::text = :id"),
-                {"id": job.client_id}
-            ).fetchone()
-            if client_result:
-                client_name = client_result[0]
-        except:
-            pass
+        client_name, client_phone, client_email = resolve_client(db, job.client_id)
         
-        # Get assigned crew names
+        # Get assigned crew names (crew table removed/disabled)
         crew_names = "Not assigned"
         if job.assigned_crew_id:
-            crew = db.query(Crew).filter(Crew.id == job.assigned_crew_id).first()
-            if crew:
-                crew_names = crew.full_name
+            # avoid querying a missing `crew` table; show assigned status
+            crew_names = "Assigned"
         
         # Determine status and action based on job workflow
         if job.status == "job_created" and not job.assigned_crew_id:
@@ -218,156 +238,75 @@ async def get_active_jobs_dashboard(
             status_display = job.status
             action = "Review"
         
-        result.append({
+        # Resolve waste type names (if any)
+        waste_names = None
+        if job.waste_types:
+            try:
+                import json
+                parsed = None
+                try:
+                    parsed = json.loads(job.waste_types)
+                except:
+                    parsed = [s.strip() for s in str(job.waste_types).split(',') if s.strip()]
+
+                resolved = []
+                for wt in parsed:
+                    # try numeric id lookup
+                    try:
+                        wt_id = int(wt)
+                        wt_res = db.execute(text("SELECT name FROM waste_types WHERE id = :id"), {"id": wt_id}).fetchone()
+                        if wt_res:
+                            resolved.append(wt_res[0])
+                        else:
+                            resolved.append(str(wt))
+                    except Exception:
+                        # try lookup by name, else use raw value
+                        try:
+                            wt_res = db.execute(text("SELECT name FROM waste_types WHERE name = :name"), {"name": wt}).fetchone()
+                            if wt_res:
+                                resolved.append(wt_res[0])
+                            else:
+                                resolved.append(str(wt))
+                        except:
+                            resolved.append(str(wt))
+
+                if resolved:
+                    waste_names = resolved
+            except:
+                waste_names = None
+
+        entry = {
             "job_id": job.id,
             "client": client_name,
-            "property": job.property_address,
-            "crew": crew_names,
+            "client_email": client_email,
+            "property_address": job.property_address,
+            "date": job.preferred_date if job.preferred_date else None,
+            "quote_amount": job.quote_amount if job.quote_amount is not None else 0.0,
+            "waste_types": waste_names,
             "status": status_display,
             "action": action
-        })
+        }
+        if job.assigned_crew_id:
+            entry["crew"] = crew_names
+
+        result.append(entry)
     
     return result
 
-@router.get("/admin/crew/pending", response_model=List[PendingCrewResponse], tags=["Admin"], summary="Get All Pending User Approvals")
-async def get_pending_crew(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    pending_crew = db.query(Crew).filter(Crew.is_approved == False, Crew.is_rejected == False).all()
-    
-    return [
-        {
-            "id": crew.id,
-            "full_name": crew.full_name,
-            "email": crew.email,
-            "phone_number": crew.phone_number or "",
-            "created_at": crew.created_at.isoformat() if crew.created_at else ""
-        }
-        for crew in pending_crew
-    ]
 
-@router.get("/admin/crew/rejected", response_model=List[RejectedCrewResponse], tags=["Admin"], summary="Get All Rejected Crew Members")
-async def get_rejected_crew(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    rejected_crew = db.query(Crew).filter(Crew.is_rejected == True).all()
-    
-    return [
-        {
-            "id": crew.id,
-            "full_name": crew.full_name,
-            "email": crew.email,
-            "phone_number": crew.phone_number or "",
-            "rejected_at": crew.updated_at.isoformat() if crew.updated_at else ""
-        }
-        for crew in rejected_crew
-    ]
 
-@router.get("/admin/crew/approved", response_model=List[ApprovedCrewResponse], tags=["Admin"], summary="Get All Approved Crew Members")
-async def get_approved_crew(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    approved_crew = db.query(Crew).filter(Crew.is_approved == True).all()
-    
-    return [
-        {
-            "id": crew.id,
-            "full_name": crew.full_name,
-            "email": crew.email,
-            "phone_number": crew.phone_number or "",
-            "approved_at": crew.updated_at.isoformat() if crew.updated_at else "",
-            "status": crew.status or "available"
-        }
-        for crew in approved_crew
-    ]
 
-@router.get("/admin/crew/pending/{crew_id}", response_model=PendingCrewDetailResponse, tags=["Admin"])
-async def get_pending_crew_by_id(
-    crew_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    crew = db.query(Crew).filter(Crew.id == crew_id, Crew.is_approved == False).first()
-    if not crew:
-        raise HTTPException(status_code=404, detail="Pending crew not found")
-    
-    return {
-        "id": crew.id,
-        "full_name": crew.full_name,
-        "email": crew.email,
-        "phone_number": crew.phone_number or "",
-        "address": crew.address or "",
-        "vehicle_number": crew.vehicle_number or "",
-        "profile_photo": crew.profile_photo or "",
-        "drivers_license": crew.drivers_license or "",
-        "dbs_certificate": crew.dbs_certificate or "",
-        "proof_of_address": crew.proof_of_address or "",
-        "insurance_certificate": crew.insurance_certificate or "",
-        "right_to_work": crew.right_to_work or "",
-        "role": "Crew",
-        "applied": crew.created_at.strftime("%m/%d/%Y") if crew.created_at else ""
-    }
 
-@router.put("/admin/crew/{crew_id}/approve", tags=["Admin"])
-async def approve_crew(
-    crew_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    crew = db.query(Crew).filter(Crew.id == crew_id).first()
-    if not crew:
-        raise HTTPException(status_code=404, detail="Crew not found")
-    
-    crew.is_approved = True
-    crew.approved_by = admin.id
-    db.commit()
-    
-    return {"message": f"Crew {crew.full_name} approved successfully"}
 
-@router.delete("/admin/crew/{crew_id}/reject", tags=["Admin"])
-async def reject_crew(
-    crew_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    crew = db.query(Crew).filter(Crew.id == crew_id).first()
-    if not crew:
-        raise HTTPException(status_code=404, detail="Crew not found")
-    
-    crew.is_rejected = True
-    crew.is_approved = False
-    db.commit()
-    
-    return {"message": f"Crew {crew.full_name} rejected successfully"}
 
-@router.get("/admin/quotes", response_model=List[QuoteResponse], tags=["Admin"], summary="Get All Quotes Created")
+
+# Removed: crew approval/rejection endpoints
+# The endpoints PUT /admin/crew/{crew_id}/approve and DELETE /admin/crew/{crew_id}/reject
+# were removed per request. Approval/rejection of crew should be managed elsewhere
+# or via an admin UI action that invokes internal workflows. If you want a
+# replacement endpoint (e.g., an admin-only batch approval), I can add one.
+
+@router.get("/admin/quotes", response_model=List[QuoteResponse], response_model_exclude_none=True, tags=["Admin"], summary="Get All Quotes Created")
 async def get_all_quotes(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -383,63 +322,78 @@ async def get_all_quotes(
     
     result = []
     for job in jobs:
-        client_name = "Client"
-        client_phone = ""
-        try:
-            client_result = db.execute(
-                text("SELECT full_name, phone_number FROM clients WHERE id = :id"),
-                {"id": job.client_id}
-            ).fetchone()
-            if client_result:
-                client_name = client_result[0]
-                client_phone = client_result[1] if client_result[1] else ""
-        except:
-            pass
+        client_name, client_phone, client_email = resolve_client(db, job.client_id)
         
-        # Get service type name
-        service_type_name = job.service_type
-        try:
-            service_result = db.execute(
-                text("SELECT name FROM service_types WHERE id = :id"),
-                {"id": job.service_type}
-            ).fetchone()
-            if service_result:
-                service_type_name = service_result[0]
-        except:
-            pass
+        # service_type removed from response per request
         
-        # Get urgency level name and SLA hours
+        # Get urgency level name
         urgency_name = ""
-        sla_hours = ""
         if job.urgency_level:
             try:
                 urgency_result = db.execute(
-                    text("SELECT name, sla_hours FROM urgency_levels WHERE id = :id"),
+                    text("SELECT name FROM urgency_levels WHERE id = :id"),
                     {"id": job.urgency_level}
                 ).fetchone()
                 if urgency_result:
                     urgency_name = urgency_result[0]
-                    sla_hours = f"{urgency_result[1]}hr"
             except:
                 pass
+
+        # Resolve waste type names for the quote
+        waste_names = None
+        if job.waste_types:
+            try:
+                import json
+                parsed = None
+                try:
+                    parsed = json.loads(job.waste_types)
+                except:
+                    parsed = [s.strip() for s in str(job.waste_types).split(',') if s.strip()]
+
+                resolved = []
+                for wt in parsed:
+                    try:
+                        wt_id = int(wt)
+                        wt_res = db.execute(text("SELECT name FROM waste_types WHERE id = :id"), {"id": wt_id}).fetchone()
+                        if wt_res:
+                            resolved.append(wt_res[0])
+                        else:
+                            resolved.append(str(wt))
+                    except Exception:
+                        try:
+                            wt_res = db.execute(text("SELECT name FROM waste_types WHERE name = :name"), {"name": wt}).fetchone()
+                            if wt_res:
+                                resolved.append(wt_res[0])
+                            else:
+                                resolved.append(str(wt))
+                        except:
+                            resolved.append(str(wt))
+
+                if resolved:
+                    waste_names = resolved
+            except:
+                waste_names = None
         
-        result.append({
+        entry = {
             "quote_id": job.id,
             "job_id": job.id,
             "client": client_name,
+            "client_email": client_email,
             "client_phone": client_phone,
             "property_address": job.property_address,
-            "service_type": service_type_name,
             "urgency_level": urgency_name,
-            "sla_hours": sla_hours,
-            "van_loads": str(job.van_loads) if job.van_loads else "",
             "preferred_date": job.preferred_date if job.preferred_date else "",
-            "deposit_price": job.deposit_amount if job.deposit_amount else 0.0,
             "additional_information": job.additional_information if job.additional_information else "",
             "status": job.status,
             "property_photos": job.property_photos if job.property_photos else "",
             "created_at": job.created_at.isoformat() if job.created_at else ""
-        })
+        }
+        if job.van_loads is not None:
+            entry["van_loads"] = str(job.van_loads)
+        if waste_names is not None:
+            entry["waste_types"] = waste_names
+
+        result.append(entry)
     
     return result
 
@@ -459,48 +413,82 @@ async def get_sent_quotes(
     
     result = []
     for job in jobs:
-        client_name = "Client"
-        try:
-            client_result = db.execute(
-                text("SELECT company_name FROM clients WHERE id = :id"),
-                {"id": job.client_id}
-            ).fetchone()
-            if client_result:
-                client_name = client_result[0]
-        except:
-            pass
-        
+        client_name, client_phone, client_email = resolve_client(db, job.client_id)
+
+        # Resolve waste type names for the sent quote
+        waste_names = None
+        if job.waste_types:
+            try:
+                import json
+                parsed = None
+                try:
+                    parsed = json.loads(job.waste_types)
+                except:
+                    parsed = [s.strip() for s in str(job.waste_types).split(',') if s.strip()]
+
+                resolved = []
+                for wt in parsed:
+                    try:
+                        wt_id = int(wt)
+                        wt_res = db.execute(text("SELECT name FROM waste_types WHERE id = :id"), {"id": wt_id}).fetchone()
+                        if wt_res:
+                            resolved.append(wt_res[0])
+                        else:
+                            resolved.append(str(wt))
+                    except Exception:
+                        try:
+                            wt_res = db.execute(text("SELECT name FROM waste_types WHERE name = :name"), {"name": wt}).fetchone()
+                            if wt_res:
+                                resolved.append(wt_res[0])
+                            else:
+                                resolved.append(str(wt))
+                        except:
+                            resolved.append(str(wt))
+
+                if resolved:
+                    waste_names = resolved
+            except:
+                waste_names = None
+
         # Calculate remaining amount
         total_amount = job.quote_amount if job.quote_amount else 0.0
         deposit_amount = job.deposit_amount if job.deposit_amount else 0.0
         remaining_amount = total_amount - deposit_amount
-        
+
         # Get admin who sent the quote
         quoted_by = "Admin"
         if job.assigned_by:
             admin_user = db.query(Admin).filter(Admin.id == job.assigned_by).first()
             if admin_user:
                 quoted_by = admin_user.full_name if hasattr(admin_user, 'full_name') else "Admin"
-        
+
         # Calculate valid until (24 hours from sent time)
         from datetime import timedelta
         valid_until = ""
         if job.updated_at:
             valid_until_date = job.updated_at + timedelta(hours=24)
             valid_until = valid_until_date.strftime("%m/%d/%Y")
-        
-        result.append({
+
+        entry = {
             "job_id": job.id,
             "client": client_name,
+            "client_email": client_email,
+            "client_phone": client_phone,
+            "property_address": job.property_address,
             "total_amount": total_amount,
             "deposit_amount": deposit_amount,
             "remaining_amount": remaining_amount,
             "quote_notes": job.quote_notes if job.quote_notes else "",
-            "quoted_by": quoted_by,
             "sent_on": job.updated_at.isoformat() if job.updated_at else "",
             "valid_until": valid_until,
-            "status": "QUOTE SENT"
-        })
+            "status": "QUOTE SENT",
+            "property_photos": job.property_photos if job.property_photos else "",
+            "additional_information": job.additional_information if job.additional_information else "",
+            "preferred_date": job.preferred_date if job.preferred_date else ""
+        }
+        if waste_names is not None:
+            entry["waste_types"] = waste_names
+        result.append(entry)
     
     return result
 
@@ -528,18 +516,7 @@ async def get_accepted_quotes(
     
     result = []
     for job in jobs:
-        client_name = "Client"
-        client_email = ""
-        try:
-            client_result = db.execute(
-                text("SELECT full_name, email FROM clients WHERE id = :id"),
-                {"id": job.client_id}
-            ).fetchone()
-            if client_result:
-                client_name = client_result[0]
-                client_email = client_result[1] if len(client_result) > 1 else ""
-        except:
-            pass
+        client_name, client_phone, client_email = resolve_client(db, job.client_id)
         
         total_amount = job.quote_amount if job.quote_amount else 0.0
         deposit_amount = job.deposit_amount if job.deposit_amount else 0.0
@@ -561,31 +538,64 @@ async def get_accepted_quotes(
         except:
             pass
         
-        quoted_by = "Admin"
-        if job.assigned_by:
-            admin_user = db.query(Admin).filter(Admin.id == job.assigned_by).first()
-            if admin_user:
-                quoted_by = admin_user.full_name if hasattr(admin_user, 'full_name') else "Admin"
-        
+        # Resolve waste type names for the accepted quote
+        waste_names = None
+        if job.waste_types:
+            try:
+                import json
+                parsed = None
+                try:
+                    parsed = json.loads(job.waste_types)
+                except:
+                    parsed = [s.strip() for s in str(job.waste_types).split(',') if s.strip()]
+
+                resolved = []
+                for wt in parsed:
+                    try:
+                        wt_id = int(wt)
+                        wt_res = db.execute(text("SELECT name FROM waste_types WHERE id = :id"), {"id": wt_id}).fetchone()
+                        if wt_res:
+                            resolved.append(wt_res[0])
+                        else:
+                            resolved.append(str(wt))
+                    except Exception:
+                        try:
+                            wt_res = db.execute(text("SELECT name FROM waste_types WHERE name = :name"), {"name": wt}).fetchone()
+                            if wt_res:
+                                resolved.append(wt_res[0])
+                            else:
+                                resolved.append(str(wt))
+                        except:
+                            resolved.append(str(wt))
+
+                if resolved:
+                    waste_names = resolved
+            except:
+                waste_names = None
+
         quoted_on = job.created_at.isoformat() if job.created_at else ""
         accepted_on = job.updated_at.isoformat() if job.updated_at else ""
-        
-        result.append({
+
+        entry = {
             "job_id": job.id,
             "client": client_name,
+            "client_phone": client_phone,
             "client_email": client_email,
             "total_amount": total_amount,
+            "property_address": job.property_address,
+            "preferred_date": job.preferred_date if job.preferred_date else "",
             "deposit_amount": deposit_amount,
             "remaining_amount": remaining_amount,
             "quote_notes": job.quote_notes if job.quote_notes else "",
-            "quoted_by": quoted_by,
             "quoted_on": quoted_on,
             "accepted_on": accepted_on,
-            "deposit_paid": deposit_paid_amount,
-            "payment_status": payment_status,
-            "paid_on": paid_on,
-            "status": "BOOKING CONFIRMED"
-        })
+            "status": "BOOKING CONFIRMED",
+            "property_photos": job.property_photos if job.property_photos else "",
+            "additional_information": job.additional_information if job.additional_information else ""
+        }
+        if waste_names is not None:
+            entry["waste_types"] = waste_names
+        result.append(entry)
     
     return result
 
@@ -622,672 +632,52 @@ async def send_quote(
         "status": job.status
     }
 
-@router.get("/admin/crew/available", response_model=List[AvailableCrewResponse], tags=["Admin"], summary="Get Available Crew Members")
-async def get_available_crew(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    crew_members = db.query(Crew).filter(
-        Crew.is_approved == True,
-        Crew.status == "available"
-    ).all()
-    
-    result = []
-    for crew in crew_members:
-        total_jobs = db.query(Job).filter(Job.assigned_crew_id == crew.id).count()
-        
-        result.append({
-            "id": crew.id,
-            "full_name": crew.full_name,
-            "phone_number": crew.phone_number if crew.phone_number else "",
-            "status": crew.status,
-            "total_jobs": total_jobs
-        })
-    
-    return result
+# Removed: GET /admin/crew/available - endpoint removed per request
+# Removed: GET /admin/crew/available and POST /admin/jobs/{job_id}/assign-crew/{crew_id}
+# These endpoints were removed per request. Crew assignment and availability
+# logic should be handled by the admin UI or a separate service. If you want
+# a replacement or a more restricted/batched assignment endpoint, tell me and
+# I will add it.
 
-@router.post("/admin/jobs/{job_id}/assign-crew/{crew_id}", tags=["Admin"], summary="Assign Crew to Job")
-async def assign_crew_to_job(
-    job_id: str,
-    crew_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
+# Removed: GET /admin/jobs/unassigned/{job_id} - endpoint removed per request
+# Unassigned job details by ID are no longer exposed via the admin API.
+# If you need a replacement (for example, a paged or limited view),
+# I can add a tailored endpoint on request.
 
-    if job.status != "deposit_paid":
-        raise HTTPException(status_code=400, detail="Deposit must be paid before assigning crew")
-    
-    crew = db.query(Crew).filter(Crew.id == crew_id, Crew.is_approved == True).first()
-    if not crew:
-        raise HTTPException(status_code=404, detail="Approved crew not found")
-    
-    job.assigned_crew_id = crew_id
-    job.assigned_by = admin.id
-    job.status = "crew_assigned"
-    crew.status = "assigned"
-    
-    db.commit()
-    
-    return {
-        "message": "Crew assigned successfully",
-        "job_id": job.id,
-        "crew_id": crew.id,
-        "crew_name": crew.full_name,
-        "status": job.status
-    }
-
-@router.get("/admin/jobs/unassigned/{job_id}", tags=["Admin"], summary="Get Unassigned Job Details by ID")
-async def get_unassigned_job_by_id(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.status != "deposit_paid" or job.assigned_crew_id is not None:
-        raise HTTPException(status_code=400, detail="Job must have deposit paid and no crew assigned")
-    
-    client_name = "Client"
-    try:
-        client_result = db.execute(
-            text("SELECT company_name FROM clients WHERE id = :id"),
-            {"id": job.client_id}
-        ).fetchone()
-        if client_result:
-            client_name = client_result[0]
-    except:
-        pass
-    
-    service_type_name = job.service_type
-    try:
-        service_result = db.execute(
-            text("SELECT name FROM service_types WHERE id = :id"),
-            {"id": job.service_type}
-        ).fetchone()
-        if service_result:
-            service_type_name = service_result[0]
-    except:
-        pass
-    
-    urgency_name = ""
-    sla_hours = ""
-    if job.urgency_level:
-        try:
-            urgency_result = db.execute(
-                text("SELECT name, sla_hours FROM urgency_levels WHERE id = :id"),
-                {"id": job.urgency_level}
-            ).fetchone()
-            if urgency_result:
-                urgency_name = urgency_result[0]
-                sla_hours = f"{urgency_result[1]}hr"
-        except:
-            pass
-    
-    # Get available crew
-    crew_members = db.query(Crew).filter(
-        Crew.is_approved == True,
-        Crew.status == "available"
-    ).all()
-    
-    available_crew = []
-    for crew in crew_members:
-        total_jobs = db.query(Job).filter(
-            Job.assigned_crew_id == crew.id,
-            Job.status == "job_completed"
-        ).count()
-        
-        available_crew.append({
-            "id": crew.id,
-            "full_name": crew.full_name,
-            "phone_number": crew.phone_number if crew.phone_number else "",
-            "status": crew.status,
-            "total_jobs": total_jobs
-        })
-    
-    return {
-        "job_id": job.id,
-        "property_address": job.property_address,
-        "service_type": service_type_name,
-        "sla_hours": sla_hours,
-        "available_crew": available_crew
-    }
-
-@router.get("/admin/jobs/unassigned", response_model=List[UnassignedJobResponse], tags=["Admin"], summary="Get Unassigned Jobs")
-async def get_unassigned_jobs(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    jobs = db.query(Job).filter(
-        Job.status == "deposit_paid",
-        Job.assigned_crew_id.is_(None)
-    ).order_by(Job.created_at.desc()).all()
-    
-    result = []
-    for job in jobs:
-        # Get service type name
-        service_type_name = job.service_type
-        try:
-            service_result = db.execute(
-                text("SELECT name FROM service_types WHERE id = :id"),
-                {"id": job.service_type}
-            ).fetchone()
-            if service_result:
-                service_type_name = service_result[0]
-        except:
-            pass
-        
-        # Get SLA hours from urgency level
-        sla_hours = ""
-        if job.urgency_level:
-            try:
-                urgency_result = db.execute(
-                    text("SELECT sla_hours FROM urgency_levels WHERE id = :id"),
-                    {"id": job.urgency_level}
-                ).fetchone()
-                if urgency_result:
-                    sla_hours = f"{urgency_result[0]}hr"
-            except:
-                pass
-        
-        result.append({
-            "job_id": job.id,
-            "property_address": job.property_address,
-            "service_type": service_type_name,
-            "sla_hours": sla_hours,
-            "status": "Needs Crew"
-        })
-    
-    return result
-
-@router.get("/admin/jobs/{job_id}/available-crew", response_model=List[AvailableCrewResponse], tags=["Admin"], summary="Get Available Crew for Job")
-async def get_available_crew_for_job(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    crew_members = db.query(Crew).filter(
-        Crew.is_approved == True,
-        Crew.status == "available"
-    ).all()
-    
-    result = []
-    for crew in crew_members:
-        total_jobs = db.query(Job).filter(
-            Job.assigned_crew_id == crew.id,
-            Job.status == "job_completed"
-        ).count()
-        
-        result.append({
-            "id": crew.id,
-            "full_name": crew.full_name,
-            "phone_number": crew.phone_number if crew.phone_number else "",
-            "status": crew.status,
-            "total_jobs": total_jobs
-        })
-    
-    return result
+# Removed: GET /admin/jobs/{job_id}/available-crew - endpoint removed per request
 
 # ============ JOB VERIFICATION ENDPOINTS ============
 
-@router.get("/admin/verification/jobs", response_model=List[JobVerificationListResponse], tags=["Admin"], summary="Get All Jobs Pending Verification")
-async def get_jobs_pending_verification(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    jobs = db.query(Job).filter(
-        Job.status.in_(["work_completed", "job_verified", "payment_pending"])
-    ).order_by(Job.updated_at.desc()).all()
-    
-    result = []
-    for job in jobs:
-        client_name = "Unknown Client"
-        try:
-            client_result = db.execute(
-                text("SELECT full_name FROM clients WHERE id = :id"),
-                {"id": job.client_id}
-            ).fetchone()
-            if client_result:
-                client_name = client_result[0]
-        except:
-            pass
-        
-        photos_count = db.query(JobPhoto).filter(JobPhoto.job_id == job.id).count()
-        
-        # Set status based on job status
-        if job.status == "work_completed":
-            status_display = "Ready to Verify"
-        else:  # job_verified or payment_pending
-            status_display = "Verified"
-        
-        result.append({
-            "job_id": job.id,
-            "client_name": client_name,
-            "property_address": job.property_address,
-            "scheduled_date": job.preferred_date if job.preferred_date else "",
-            "estimated_value": job.quote_amount if job.quote_amount else 0.0,
-            "status": status_display,
-            "photos_count": photos_count
-        })
-    
-    return result
+# Removed: GET /admin/verification/jobs - endpoint removed per request
 
-@router.get("/admin/verification/jobs/{job_id}", response_model=JobVerificationDetailResponse, tags=["Admin"], summary="Get Job Verification Details")
-async def get_job_verification_details(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.status != "work_completed":
-        raise HTTPException(status_code=400, detail="Job is not pending verification")
-    
-    client_name = "Unknown Client"
-    client_phone = ""
-    try:
-        client_result = db.execute(
-            text("SELECT full_name, phone_number FROM clients WHERE id = :id"),
-            {"id": job.client_id}
-        ).fetchone()
-        if client_result:
-            client_name = client_result[0]
-            client_phone = client_result[1] or ""
-    except:
-        pass
-    
-    crew_name = "Unknown Crew"
-    crew_id = ""
-    if job.assigned_crew_id:
-        try:
-            crew_result = db.execute(
-                text("SELECT full_name, id FROM crew WHERE id = :id"),
-                {"id": job.assigned_crew_id}
-            ).fetchone()
-            if crew_result:
-                crew_name = crew_result[0]
-                crew_id = crew_result[1]
-        except:
-            pass
-    
-    service_type_name = job.service_type
-    try:
-        service_result = db.execute(
-            text("SELECT name FROM service_types WHERE id = :id"),
-            {"id": job.service_type}
-        ).fetchone()
-        if service_result:
-            service_type_name = service_result[0]
-    except:
-        pass
-    
-    before_photos = db.query(JobPhoto).filter(
-        JobPhoto.job_id == job_id,
-        JobPhoto.type == "before"
-    ).all()
-    
-    after_photos = db.query(JobPhoto).filter(
-        JobPhoto.job_id == job_id,
-        JobPhoto.type == "after"
-    ).all()
-    
-    # Calculate work duration and SLA status
-    work_duration = "N/A"
-    sla_status = "SLA Met"
-    if job.created_at and job.updated_at:
-        duration = job.updated_at - job.created_at
-        hours = int(duration.total_seconds() // 3600)
-        minutes = int((duration.total_seconds() % 3600) // 60)
-        if hours > 0:
-            work_duration = f"{hours}h {minutes}m"
-        else:
-            work_duration = f"{minutes}m"
-    
-    return {
-        "job_id": job.id,
-        "client_name": client_name,
-        "client_phone": client_phone,
-        "property_address": job.property_address,
-        "service_type": service_type_name,
-        "scheduled_date": job.preferred_date if job.preferred_date else "",
-        "crew_name": crew_name,
-        "completed_at": job.updated_at.isoformat() if job.updated_at else "",
-        "work_duration": work_duration,
-        "sla_status": sla_status,
-        "before_photos": [
-            {
-                "id": photo.id,
-                "photo_url": photo.photo_url,
-                "type": photo.type,
-                "timestamp": photo.timestamp.isoformat() if photo.timestamp else ""
-            }
-            for photo in before_photos
-        ],
-        "after_photos": [
-            {
-                "id": photo.id,
-                "photo_url": photo.photo_url,
-                "type": photo.type,
-                "timestamp": photo.timestamp.isoformat() if photo.timestamp else ""
-            }
-            for photo in after_photos
-        ],
-        "total_photos": len(before_photos) + len(after_photos)
-    }
+# Removed: GET /admin/verification/jobs/{job_id} - Get Job Verification Details
+# This endpoint was removed per request. Use the verification list and approve/reject
+# endpoints to manage verification flow. If you need a replacement endpoint,
+# I can add a tailored, simplified version.
 
-@router.post("/admin/verification/jobs/{job_id}/approve", tags=["Admin"], summary="Approve Job and Complete Verification")
-async def approve_job_verification(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.status != "work_completed":
-        raise HTTPException(status_code=400, detail="Job is not pending verification")
-    
-    job.status = "job_verified"
-    
-    if job.assigned_crew_id:
-        crew = db.query(Crew).filter(Crew.id == job.assigned_crew_id).first()
-        if crew:
-            crew.status = "available"
-    
-    db.commit()
-    
-    return {
-        "message": "Job verified successfully",
-        "job_id": job.id,
-        "status": job.status
-    }
-
-@router.post("/admin/verification/jobs/{job_id}/reject", tags=["Admin"], summary="Reject Job Verification")
-async def reject_job_verification(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.status != "work_completed":
-        raise HTTPException(status_code=400, detail="Job is not pending verification")
-    
-    job.status = "clearance_in_progress"
-    
-    db.commit()
-    
-    return {
-        "message": "Job verification rejected. Crew needs to resubmit.",
-        "job_id": job.id,
-        "status": job.status
-    }
-
-@router.post("/admin/verification/jobs/{job_id}/send-payment-request", tags=["Admin"], summary="Send Final Price and Payment Request")
-async def send_payment_request(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.status != "job_verified":
-        raise HTTPException(status_code=400, detail="Job must be verified before sending payment request")
-    
-    quote_amount = job.quote_amount if job.quote_amount else 0.0
-    deposit_amount = job.deposit_amount if job.deposit_amount else 0.0
-    remaining_amount = quote_amount - deposit_amount
-    
-    job.remaining_amount = remaining_amount
-    job.status = "payment_pending"
-    
-    db.commit()
-    
-    return {
-        "message": "Payment request sent to client successfully",
-        "job_id": job.id,
-        "quote_amount": quote_amount,
-        "deposit_amount": deposit_amount,
-        "remaining_amount": remaining_amount,
-        "status": job.status
-    }
+# Removed: Job verification approve/reject/send-payment-request endpoints
+# The following endpoints were intentionally removed per request:
+# - POST /admin/verification/jobs/{job_id}/approve
+# - POST /admin/verification/jobs/{job_id}/reject
+# - POST /admin/verification/jobs/{job_id}/send-payment-request
+#
+# Verification and final payment workflows should be handled by an external
+# service or a simplified admin UI action. If you want these restored with a
+# specific, limited behavior, tell me and I will implement them.
 
 
-@router.get("/admin/payments/completed", tags=["Admin"], summary="Get Completed Payments")
-async def get_completed_payments(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get all completed payments (fully paid jobs)"""
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        query = text("""
-            SELECT 
-                j.id, j.property_address, j.service_type, j.quote_amount,
-                j.deposit_amount, j.remaining_amount, j.updated_at,
-                c.full_name, c.email, c.phone_number
-            FROM jobs j
-            LEFT JOIN clients c ON j.client_id::uuid = c.id
-            WHERE j.status = 'job_completed'
-            ORDER BY j.updated_at DESC
-        """)
-        results = db.execute(query).fetchall()
-        
-        payments = []
-        for r in results:
-            service_type_name = r[2]
-            try:
-                service_result = db.execute(
-                    text("SELECT name FROM service_types WHERE id = :id"),
-                    {"id": r[2]}
-                ).fetchone()
-                if service_result:
-                    service_type_name = service_result[0]
-            except:
-                pass
-            
-            payments.append({
-                "job_id": r[0],
-                "client_name": r[7] or "Unknown Client",
-                "client_email": r[8] or "",
-                "client_phone": r[9] or "",
-                "property_address": r[1],
-                "service_type": service_type_name,
-                "total_amount": float(r[3]) if r[3] else 0.0,
-                "deposit_paid": float(r[4]) if r[4] else 0.0,
-                "remaining_paid": float(r[5]) if r[5] else 0.0,
-                "completed_at": r[6].strftime("%m/%d/%Y") if r[6] else "",
-                "status": "Remaining Amount Paid"
-            })
-        
-        return payments
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+# Removed: GET /admin/payments/completed - endpoint removed per request
+# Completed payments listing is no longer exposed via the admin API.
+# If a narrow or paged payment report is required, I can add a tailored
+# endpoint on request.
 
-@router.get("/admin/payments/pending", tags=["Admin"], summary="Get Pending Payments")
-async def get_pending_payments(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get all pending payments (deposit and remaining)"""
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        # Get jobs with all payment-related statuses
-        query = text("""
-            SELECT 
-                j.id, j.property_address, j.service_type, j.quote_amount,
-                j.deposit_amount, j.remaining_amount, j.status, c.full_name, c.email, c.phone_number
-            FROM jobs j
-            LEFT JOIN clients c ON j.client_id::uuid = c.id
-            WHERE j.status IN ('quote_accepted', 'deposit_paid', 'crew_assigned', 'crew_arrived', 'before_photo', 'clearance_in_progress', 'after_photo', 'work_completed', 'job_verified', 'payment_pending')
-            ORDER BY j.created_at DESC
-        """)
-        results = db.execute(query).fetchall()
-        
-        payments = []
-        for r in results:
-            service_type_name = r[2]
-            try:
-                service_result = db.execute(
-                    text("SELECT name FROM service_types WHERE id = :id"),
-                    {"id": r[2]}
-                ).fetchone()
-                if service_result:
-                    service_type_name = service_result[0]
-            except:
-                pass
-            
-            job_status = r[6]
-            deposit_amount = float(r[4]) if r[4] else 0.0
-            remaining_amount = float(r[5]) if r[5] else 0.0
-            total_amount = float(r[3]) if r[3] else 0.0
-            
-            # Calculate remaining amount if not set
-            if remaining_amount == 0.0 and total_amount > 0.0 and deposit_amount > 0.0:
-                remaining_amount = total_amount - deposit_amount
-            
-            # Determine payment status based on job status
-            if job_status == "quote_accepted":
-                payment_type = "Deposit Payment Pending"
-                amount_due = deposit_amount
-                status = "Pending"
-            elif job_status in ["deposit_paid", "crew_assigned", "crew_arrived", "before_photo", "clearance_in_progress", "after_photo", "work_completed", "job_verified"]:
-                payment_type = "Deposit Paid"
-                amount_due = 0.0
-                status = "Deposit Paid"
-            elif job_status == "payment_pending":
-                payment_type = "Remaining Amount Pending"
-                amount_due = remaining_amount
-                status = "Pending"
-            else:
-                payment_type = "Unknown"
-                amount_due = 0.0
-                status = "Unknown"
-            
-            payments.append({
-                "job_id": r[0],
-                "client_name": r[7] or "Unknown Client",
-                "client_email": r[8] or "",
-                "client_phone": r[9] or "",
-                "property_address": r[1],
-                "service_type": service_type_name,
-                "total_amount": total_amount,
-                "deposit_amount": deposit_amount,
-                "remaining_amount": remaining_amount,
-                "amount_due": amount_due,
-                "payment_type": payment_type,
-                "status": status
-            })
-        
-        return payments
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+# Removed: GET /admin/payments/pending - endpoint removed per request
+# Pending payments overview is no longer exposed via the admin API.
+# Request a narrower reporting endpoint if required.
 
-@router.get("/admin/payments/pending/{job_id}", tags=["Admin"], summary="Get Pending Payment Details by ID")
-async def get_pending_payment_by_id(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get detailed payment information for a specific job"""
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.status not in ['quote_accepted', 'deposit_paid', 'crew_assigned', 'crew_arrived', 'before_photo', 'clearance_in_progress', 'after_photo', 'work_completed', 'job_verified', 'payment_pending']:
-        raise HTTPException(status_code=400, detail="Job is not in a payment-related status")
-    
-    client_name = "Unknown Client"
-    client_email = ""
-    client_phone = ""
-    try:
-        client_result = db.execute(
-            text("SELECT full_name, email, phone_number FROM clients WHERE id = :id"),
-            {"id": job.client_id}
-        ).fetchone()
-        if client_result:
-            client_name = client_result[0] or "Unknown Client"
-            client_email = client_result[1] or ""
-            client_phone = client_result[2] or ""
-    except:
-        pass
-    
-    service_type_name = job.service_type
-    try:
-        service_result = db.execute(
-            text("SELECT name FROM service_types WHERE id = :id"),
-            {"id": job.service_type}
-        ).fetchone()
-        if service_result:
-            service_type_name = service_result[0]
-    except:
-        pass
+# Removed: GET /admin/payments/pending/{job_id} - endpoint removed per request
+# Detailed pending-payment-by-id endpoint removed. Payment details should
+# be surfaced by a reporting service or via the client backend.
     
     deposit_amount = float(job.deposit_amount) if job.deposit_amount else 0.0
     remaining_amount = float(job.remaining_amount) if job.remaining_amount else 0.0
@@ -1398,256 +788,14 @@ async def cancel_job_by_admin(
         "cancellation_reason": cancellation_reason
     }
 
-@router.get("/admin/jobs/rejected-cancelled", tags=["Admin"], summary="Get All Rejected and Cancelled Jobs")
-async def get_rejected_cancelled_jobs(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get all jobs that were declined by client or cancelled"""
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        query = text("""
-            SELECT 
-                j.id, j.property_address, j.service_type, j.status,
-                j.decline_reason, j.cancellation_reason, j.updated_at,
-                c.full_name, c.email
-            FROM jobs j
-            LEFT JOIN clients c ON j.client_id::uuid = c.id
-            WHERE j.status IN ('quote_rejected', 'cancelled')
-            ORDER BY j.updated_at DESC
-        """)
-        results = db.execute(query).fetchall()
-        
-        jobs = []
-        for r in results:
-            service_type_name = r[2]
-            try:
-                service_result = db.execute(
-                    text("SELECT name FROM service_types WHERE id = :id"),
-                    {"id": r[2]}
-                ).fetchone()
-                if service_result:
-                    service_type_name = service_result[0]
-            except:
-                pass
-            
-            status = r[3]
-            reason = r[4] if status == "quote_rejected" else r[5]
-            status_display = "Quote Declined" if status == "quote_rejected" else "Job Cancelled"
-            
-            jobs.append({
-                "job_id": r[0],
-                "client_name": r[7] or "Unknown Client",
-                "client_email": r[8] or "",
-                "property_address": r[1],
-                "service_type": service_type_name,
-                "status": status_display,
-                "reason": reason or "",
-                "action_date": r[6].strftime("%d %b %Y") if r[6] else ""
-            })
-        
-        return jobs
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+# Removed: GET /admin/jobs/rejected-cancelled - endpoint removed per request
+# Rejected/cancelled jobs listing is no longer exposed via the admin API.
+# If a filtered or audited view is required, I can add a tailored report endpoint.
 
-@router.get("/admin/jobs/verified", tags=["Admin"], summary="Get All Verified Jobs")
-async def get_verified_jobs(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get all jobs that have been verified by admin"""
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    jobs = db.query(Job).filter(
-        Job.status.in_(["job_verified", "payment_pending", "job_completed"])
-    ).order_by(Job.updated_at.desc()).all()
-    
-    result = []
-    for job in jobs:
-        client_name = "Unknown Client"
-        try:
-            client_result = db.execute(
-                text("SELECT full_name FROM clients WHERE id = :id"),
-                {"id": job.client_id}
-            ).fetchone()
-            if client_result:
-                client_name = client_result[0]
-        except:
-            pass
-        
-        crew_name = "Unknown Crew"
-        if job.assigned_crew_id:
-            crew = db.query(Crew).filter(Crew.id == job.assigned_crew_id).first()
-            if crew:
-                crew_name = crew.full_name
-        
-        service_type_name = job.service_type
-        try:
-            service_result = db.execute(
-                text("SELECT name FROM service_types WHERE id = :id"),
-                {"id": job.service_type}
-            ).fetchone()
-            if service_result:
-                service_type_name = service_result[0]
-        except:
-            pass
-        
-        photos_count = db.query(JobPhoto).filter(JobPhoto.job_id == job.id).count()
-        
-        status_display = "Verified"
-        if job.status == "payment_pending":
-            status_display = "Payment Pending"
-        elif job.status == "job_completed":
-            status_display = "Completed"
-        
-        result.append({
-            "job_id": job.id,
-            "client_name": client_name,
-            "crew_name": crew_name,
-            "property_address": job.property_address,
-            "service_type": service_type_name,
-            "quote_amount": job.quote_amount if job.quote_amount else 0.0,
-            "deposit_amount": job.deposit_amount if job.deposit_amount else 0.0,
-            "remaining_amount": job.remaining_amount if job.remaining_amount else 0.0,
-            "verified_at": job.updated_at.isoformat() if job.updated_at else "",
-            "photos_count": photos_count,
-            "status": status_display
-        })
-    
-    return result
+# Removed: GET /admin/jobs/verified - endpoint removed per request
+# Verified jobs listing is no longer exposed via the admin API. Request a
+# tailored report if a verification summary is needed.
 
-@router.get("/admin/jobs/verified/{job_id}", tags=["Admin"], summary="Get Verified Job Details by ID")
-async def get_verified_job_by_id(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get detailed information about a verified job including payment status"""
-    admin = db.query(Admin).filter(Admin.email == current_user.get("sub")).first()
-    if not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.status not in ["job_verified", "payment_pending", "job_completed"]:
-        raise HTTPException(status_code=400, detail="Job is not verified")
-    
-    # Get client details
-    client_name = "Unknown Client"
-    client_email = ""
-    client_phone = ""
-    try:
-        client_result = db.execute(
-            text("SELECT full_name, email, phone_number FROM clients WHERE id = :id"),
-            {"id": job.client_id}
-        ).fetchone()
-        if client_result:
-            client_name = client_result[0]
-            client_email = client_result[1] or ""
-            client_phone = client_result[2] or ""
-    except:
-        pass
-    
-    # Get crew details
-    crew_name = "Unknown Crew"
-    crew_phone = ""
-    if job.assigned_crew_id:
-        crew = db.query(Crew).filter(Crew.id == job.assigned_crew_id).first()
-        if crew:
-            crew_name = crew.full_name
-            crew_phone = crew.phone_number or ""
-    
-    # Get service type
-    service_type_name = job.service_type
-    try:
-        service_result = db.execute(
-            text("SELECT name FROM service_types WHERE id = :id"),
-            {"id": job.service_type}
-        ).fetchone()
-        if service_result:
-            service_type_name = service_result[0]
-    except:
-        pass
-    
-    # Get photos
-    before_photos = db.query(JobPhoto).filter(
-        JobPhoto.job_id == job_id,
-        JobPhoto.type == "before"
-    ).all()
-    
-    after_photos = db.query(JobPhoto).filter(
-        JobPhoto.job_id == job_id,
-        JobPhoto.type == "after"
-    ).all()
-    
-    # Check payment status (payments are in client_backend DB)
-    deposit_paid = False
-    remaining_paid = False
-    
-    # Since payments table is in different database, we check job status instead
-    if job.status == "job_completed":
-        deposit_paid = True
-        remaining_paid = True
-    elif job.status == "payment_pending":
-        deposit_paid = True
-        remaining_paid = False
-    elif job.status == "job_verified":
-        deposit_paid = True
-        remaining_paid = False
-    
-    # Determine payment status display
-    if job.status == "job_verified":
-        payment_status = "Verified - Awaiting Payment Request"
-    elif job.status == "payment_pending":
-        if remaining_paid:
-            payment_status = "Fully Paid - Pending Completion"
-        else:
-            payment_status = "Remaining Amount Pending"
-    elif job.status == "job_completed":
-        payment_status = "Fully Paid - Job Completed"
-    else:
-        payment_status = "Unknown"
-    
-    return {
-        "job_id": job.id,
-        "client_name": client_name,
-        "client_email": client_email,
-        "client_phone": client_phone,
-        "crew_name": crew_name,
-        "crew_phone": crew_phone,
-        "property_address": job.property_address,
-        "service_type": service_type_name,
-        "preferred_date": job.preferred_date if job.preferred_date else "",
-        "quote_amount": job.quote_amount if job.quote_amount else 0.0,
-        "deposit_amount": job.deposit_amount if job.deposit_amount else 0.0,
-        "remaining_amount": job.remaining_amount if job.remaining_amount else 0.0,
-        "deposit_paid": deposit_paid,
-        "remaining_paid": remaining_paid,
-        "payment_status": payment_status,
-        "job_status": job.status,
-        "verified_at": job.updated_at.isoformat() if job.updated_at else "",
-        "before_photos": [
-            {
-                "id": photo.id,
-                "photo_url": photo.photo_url,
-                "timestamp": photo.timestamp.isoformat() if photo.timestamp else ""
-            }
-            for photo in before_photos
-        ],
-        "after_photos": [
-            {
-                "id": photo.id,
-                "photo_url": photo.photo_url,
-                "timestamp": photo.timestamp.isoformat() if photo.timestamp else ""
-            }
-            for photo in after_photos
-        ],
-        "total_photos": len(before_photos) + len(after_photos)
-    }
+ # Removed: GET /admin/jobs/verified/{job_id} - endpoint removed per request
+ # Detailed verified-job-by-id endpoint removed. If specific verification
+ # details must be available, we can implement a limited view on request.

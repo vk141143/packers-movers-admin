@@ -56,28 +56,9 @@ Returns statistics using deposit amounts
 }
 ```
 
-### 2. GET /api/admin/verification/jobs
-Lists all pending verifications with deposit amounts
-```json
-[
-  {
-    "job_id": "JOB-TFXWYLEF6",
-    "estimated_value": 2500.00,  // deposit_amount
-    "photos_count": 4
-  }
-]
-```
+<!-- Removed: GET /api/admin/verification/jobs - pending verifications endpoint removed -->
 
-### 3. GET /api/admin/verification/jobs/{job_id}
-Detailed job info with deposit amount
-```json
-{
-  "job_id": "JOB-TFXWYLEF6",
-  "estimated_value": 2500.00,  // deposit_amount
-  "before_photos": [...],
-  "after_photos": [...]
-}
-```
+<!-- Removed: GET /api/admin/verification/jobs/{job_id} - detailed verification endpoint removed -->
 
 ### 4. POST /api/admin/verification/jobs/{job_id}/approve
 Approve job (defaults to deposit_amount if no final_price)
@@ -136,9 +117,7 @@ curl -X POST "http://localhost:8001/api/auth/login/admin" \
 curl -X GET "http://localhost:8001/api/admin/verification/stats" \
   -H "Authorization: Bearer YOUR_TOKEN"
 
-# 3. Get pending jobs
-curl -X GET "http://localhost:8001/api/admin/verification/jobs" \
-  -H "Authorization: Bearer YOUR_TOKEN"
+<!-- Removed: GET /api/admin/verification/jobs - pending verifications endpoint removed; use stats and approve/reject endpoints -->
 ```
 
 ---
@@ -173,10 +152,8 @@ curl -X GET "http://localhost:8001/api/admin/verification/jobs" \
 ```javascript
 // Load dashboard
 const stats = await fetch('/api/admin/verification/stats');
-const jobs = await fetch('/api/admin/verification/jobs');
-
-// View details
-const details = await fetch(`/api/admin/verification/jobs/${jobId}`);
+// Removed: fetch('/api/admin/verification/jobs') - pending-verifications list removed
+// View details - removed: per-job verification details endpoint removed
 
 // Approve
 await fetch(`/api/admin/verification/jobs/${jobId}/approve`, {
